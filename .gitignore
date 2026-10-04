@@ -7,3 +7,4 @@ mlartifacts/
 outputs/
 reports/golden/*.errors.jsonl
 reports/sanity_wrong.jsonl
+.env
