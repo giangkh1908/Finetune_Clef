@@ -46,30 +46,106 @@ bảng/cột nên SQL của nó không chạy được (chi tiết trong `src/pr
 | golden-EX ≪ val-EX | chọn quá khớp val / lệch phân phối | **không chỉnh theo golden**; mở rộng val |
 | EX ổn nhưng precision@ngưỡng trên golden ≪ target | ngưỡng chọn trên val không chuyển giao | calibrate lại trên val, milestone mới |
 
-## Chạy
-```bash
-pip install -r requirements.txt
+## Luồng chạy
 
-dvc repro check_data          # laptop (CPU) cũng chạy được
-dvc repro sanity              # GPU: chạy cái này TRƯỚC, fail thì dừng
-dvc repro                     # cả vòng: bakeoff → train → val → register → golden
-cat reports/val_table.md reports/next_action.md
-
-# Vòng sau (ví dụ): giảm epoch vì overfit
-dvc exp run -S milestone.id=M2 -S 'milestone.note=giảm epoch' -S train.epochs=2
-dvc exp show                  # so các vòng
+```
+ LAPTOP (Windows)                         GOOGLE DRIVE / GITHUB              MÁY GPU THUÊ (Linux, RTX 4090)
+ ─────────────────                        ─────────────────────              ──────────────────────────────
+ B0  dvc repro check_data  ── dvc push ──►  Drive (dữ liệu, private)
+                           ── git push ──►  GitHub (code, dvc.lock)  ──clone─► B1  cài môi trường
+                                                                     ──pull──► B2  lấy dữ liệu, kiểm tra md5
+                                                                               B3  dvc repro sanity    (cổng chặn)
+                                                                               B4  dvc repro           (cả vòng)
+ B6  đọc kết quả, quyết định  ◄── git pull / scp ◄─────────────────────────── B5  lưu kết quả TRƯỚC khi tắt máy
+ B7  milestone mới → quay lại B3/B4
 ```
 
-**Xem MLflow** (tracking, registry, trace): `mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000`.
-Trên máy thuê thì mở bằng `ssh -L 5000:localhost:5000 <máy thuê>`.
-Có thể đặt `MLFLOW_TRACKING_URI` trỏ tới server MLflow của bạn để mọi máy log chung một chỗ.
+### B0. Laptop: chuẩn bị (đã xong)
+```bash
+.venv\Scripts\python -m dvc repro check_data   # tải dữ liệu, tạo train/val/golden, kiểm tra trên CPU
+.venv\Scripts\python -m dvc push               # đẩy dữ liệu lên Drive (lần đầu mở trình duyệt để đăng nhập)
+git push -u origin main                        # code + params.yaml + dvc.yaml + dvc.lock
+```
+Secret OAuth của Drive nằm trong `.env` và `.dvc/config.local` (đều không lên git).
+Token đăng nhập Drive được lưu ở `%LOCALAPPDATA%\pydrive2fs\Cache\<client_id>\default.json`; máy GPU cần file này.
 
-**Dùng model** (mỗi lần gọi là một trace trong experiment `text2sql-inference`):
-`python -m src.infer --db my.sqlite --question "Có bao nhiêu khách hàng ở Hà Nội?"`
+### B1. Máy GPU: cài môi trường
+Thuê RTX 4090 24GB (vast.ai / RunPod, template PyTorch + CUDA), ổ đĩa ≥ 100GB vì checkpoint fp32 khá nặng.
+```bash
+git clone https://github.com/giangkh1908/Finetune_Qwen3.5-0.8B.git && cd Finetune_Qwen3.5-0.8B
+pip install -r requirements.txt          # flash-linear-attention / causal-conv1d build lỗi thì bỏ, chỉ chậm hơn
+tmux new -s ft                           # mọi lệnh dài chạy trong tmux, mất SSH không chết job
+```
 
-**DVC remote** (để máy thuê và laptop dùng chung dữ liệu theo md5):
-`dvc remote add -d storage s3://<bucket>/text2sql` (hoặc ssh/gdrive), sau đó `dvc push` / `dvc pull`.
-Remote phải là **private** vì license ViText2SQL cấm phân phối lại.
+### B2. Máy GPU: lấy dữ liệu và kiểm tra lineage
+Từ laptop, copy token Drive lên máy GPU:
+```bash
+scp "%LOCALAPPDATA%\pydrive2fs\Cache\<client_id>\default.json" root@<ip-gpu>:~/gdrive-creds.json
+```
+Trên máy GPU:
+```bash
+dvc remote modify --local storage gdrive_client_id <CLIENT_ID>          # lấy trong .env ở laptop
+dvc remote modify --local storage gdrive_client_secret <CLIENT_SECRET>
+dvc remote modify --local storage gdrive_user_credentials_file ~/gdrive-creds.json
+dvc pull                       # kéo raw/ + data/ đúng theo md5 trong dvc.lock
+dvc status                     # "Data and pipelines are up to date" = dữ liệu khớp từng byte với laptop
+```
+Không có Drive thì `dvc repro check_data` tự tải lại từ nguồn gốc, rồi `git diff dvc.lock` phải không có thay đổi.
+
+### B3. Máy GPU: sanity (cổng chặn, vài phút)
+```bash
+dvc repro sanity
+cat reports/sanity.json        # "pass": true mới được đi tiếp
+```
+Fail thì **dừng**, xem `reports/sanity_wrong.jsonl` (cột `pred` so với `sql`, cột `raw_output`):
+loss không xuống → lỗi train (lr, label masking); loss thấp mà EX thấp → lỗi inference (template, eos) hoặc bộ chấm.
+
+### B4. Máy GPU: chạy cả vòng (khoảng 8–12 giờ)
+```bash
+dvc repro 2>&1 | tee logs_M1.txt        # bakeoff → train → eval_val → select → register → golden
+```
+Theo dõi trong lúc chạy (cửa sổ tmux khác: `Ctrl+b c`):
+```bash
+nvidia-smi -l 5                                         # VRAM, OOM thì giảm train.batch_size và tăng grad_accum
+mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000
+# trên laptop: ssh -L 5000:localhost:5000 root@<ip-gpu>, rồi mở http://localhost:5000
+```
+Máy bị ngắt giữa chừng: chạy lại `dvc repro`. Run đã xong (có file `DONE`) và dự đoán đã chấm được giữ lại.
+
+### B5. Máy GPU: lưu kết quả TRƯỚC KHI TẮT MÁY
+Tắt máy thuê là mất hết thứ chưa mang về.
+```bash
+git add dvc.lock reports/ && git commit -m "M1: kết quả" && git push     # bảng val, bakeoff, golden, ledger
+dvc push                                                                  # nếu có dữ liệu mới
+tar czf mlflow_M1.tgz mlflow.db mlartifacts/                              # tracking + registry + model đã đăng ký
+```
+Từ laptop: `scp root@<ip-gpu>:~/Finetune_Qwen3.5-0.8B/mlflow_M1.tgz .`
+(Hoặc từ đầu đặt `MLFLOW_TRACKING_URI` trỏ tới một server MLflow riêng, khi đó không cần bước này.)
+
+### B6. Laptop: đọc kết quả, quyết định
+```bash
+git pull
+```
+Đọc theo thứ tự:
+1. `reports/bakeoff.md`: base model nào được chọn, vì sao.
+2. `reports/val_table.md`: từng checkpoint, chẩn đoán under/overfit, độ ổn định qua seed, checkpoint + ngưỡng được chọn.
+3. `reports/next_action.md`: kết quả golden, có promote `champion` không, vòng sau nên làm gì.
+4. `reports/golden/ledger.csv`: lịch sử golden qua các milestone.
+
+### B7. Vòng sau (milestone mới)
+Sửa đúng thứ mà `next_action.md` chỉ ra, đổi `milestone.id`, rồi quay lại B4 (đổi code thì chạy lại B3 trước):
+```bash
+dvc exp run -S milestone.id=M2 -S 'milestone.note=giảm epoch vì overfit' -S train.epochs=2
+dvc exp show                   # so params + metrics giữa các vòng
+```
+DVC chỉ chạy lại các stage bị ảnh hưởng. Ví dụ đổi `train.*` thì không chạy lại fetch/prepare/sanity/bakeoff.
+Golden của milestone cũ không chấm lại được; model mới bắt buộc thuộc milestone mới.
+
+### Dùng model đã promote
+```bash
+python -m src.infer --db my.sqlite --question "Có bao nhiêu khách hàng ở Hà Nội?"   # alias champion
+```
+Mỗi lần gọi là một trace trong experiment `text2sql-inference` của MLflow (schema → generate → execute → quyết định).
 
 ## GPU
 - sanity / train 0.8B: RTX 4090 24GB.
