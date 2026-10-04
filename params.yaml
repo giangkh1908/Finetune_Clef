@@ -38,16 +38,17 @@ sanity:
 
 # ---- Bước 2: bakeoff chọn base model (chỉ dùng train + val, không bao giờ đụng golden)
 bakeoff:
+  # Chạy lần lượt, 1 GPU. Chỉ model <= ~1B: full FT vừa RTX 4090 24GB và inference vừa GPU 4GB.
+  # Muốn thử 1.5B-2B: thêm vào kèm `method: lora`, hoặc thuê A100 80GB để full FT.
   candidates:
     - {name: qwen3.5-0.8b, hf_id: Qwen/Qwen3.5-0.8B}
-    - {name: qwen3.5-2b, hf_id: Qwen/Qwen3.5-2B}
-    - {name: qwen3-1.7b, hf_id: Qwen/Qwen3-1.7B}
-    - {name: qwen2.5-coder-1.5b, hf_id: Qwen/Qwen2.5-Coder-1.5B-Instruct}
+    - {name: qwen3-0.6b, hf_id: Qwen/Qwen3-0.6B}
+    - {name: qwen2.5-coder-0.5b, hf_id: Qwen/Qwen2.5-Coder-0.5B-Instruct}
   train_subset: 3000           # fine-tune ngắn, cùng ngân sách cho mọi ứng viên
   epochs: 1
   lr: 2.0e-5
   latency_probe: 50            # số câu đo latency batch=1
-  max_params_b: 2.5            # ràng buộc triển khai
+  max_params_b: 1.0            # ràng buộc triển khai: chạy được trên GPU 4GB (bf16)
   prefer_smaller_within: 0.02  # model nhỏ hơn được chọn nếu val-EX kém model tốt nhất <= 2 điểm
 
 # ---- Bước 3: train thật = grid hyperparam x nhiều seed (để đo độ ổn định)

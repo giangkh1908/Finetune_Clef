@@ -73,7 +73,7 @@ Remote phải là **private** vì license ViText2SQL cấm phân phối lại.
 
 ## GPU
 - sanity / train 0.8B: RTX 4090 24GB.
-- bakeoff có ứng viên 2B full fine-tune: cần A100/H100 80GB, hoặc đặt `method: lora` cho ứng viên đó trong `params.yaml`.
+- bakeoff: 3 ứng viên ≤ 1B chạy lần lượt trên cùng 1 RTX 4090 (~1–1.5 giờ). Thêm model 1.5–2B thì đặt `method: lora` hoặc thuê A100 80GB.
 - Ước tính cho grid mặc định (2 lr × 2 seed × 3 epoch) với 0.8B trên 4090: khoảng 6–10 giờ train + 1–2 giờ eval.
   Thu nhỏ grid nếu muốn rẻ hơn.
 
