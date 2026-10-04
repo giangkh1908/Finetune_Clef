@@ -1,6 +1,7 @@
-# Bakeoff: chọn base model. NGOÀI vòng lặp milestone, chỉ chạy khi chủ động gọi:
+# Bakeoff: Clef-flash xử lý tiếng Việt tốt đến đâu so với Laya, và gán nhãn thêm thì được bao nhiêu.
+# NGOÀI vòng lặp milestone, chỉ chạy khi chủ động gọi:
 #   dvc repro bakeoff/dvc.yaml
-# Đọc reports/bakeoff.md rồi tự ghi quyết định vào params.yaml: train.base_model.
+# Đọc reports/bakeoff.md rồi tự ghi quyết định vào params.yaml: train.base_model (+ base_revision).
 # Không có stage nào trong vòng lặp phụ thuộc vào đây, nên sửa code/dữ liệu không kéo bakeoff chạy lại.
 
 stages:
@@ -9,11 +10,17 @@ stages:
     cmd: python -m src.bakeoff
     deps:
       - src/bakeoff.py
+      - src/engines.py
+      - src/finetune.py
+      - src/metrics.py
+      - schema/massive_intent.yaml
       - data/train.jsonl
       - data/val.jsonl
       - reports/sanity.json   # chỉ so model khi pipeline đã qua sanity
     params:
       - bakeoff
+      - eval
+      - select.target_precision
     outs:
       - reports/bakeoff.json:
           cache: false

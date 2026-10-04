@@ -1,11 +1,12 @@
 """Stage `select`: đọc bảng val, chẩn đoán từng checkpoint, chọn cấu hình ỔN ĐỊNH nhất, rồi chọn ngưỡng trên val.
 
 Chẩn đoán:
-  - underfit : train-EX thấp -> model chưa học được (tăng lr/epoch, kiểm tra dữ liệu)
-  - overfit  : train-EX cao nhưng val-EX kém xa, hoặc val-loss tăng + val-EX giảm so với epoch trước
+  - underfit : train-acc thấp -> model chưa học được (tăng lr/epoch, kiểm tra dữ liệu)
+  - overfit  : train-acc cao nhưng val-acc kém xa, hoặc val-NLL tăng + val-acc giảm so với epoch trước
+  - miscalibrated : ECE trên val cao -> confidence không đáng tin, ngưỡng sẽ khó chuyển giao
   - ok
-Độ ổn định: gom theo (lr, epoch) qua các seed, điểm = mean(val-EX) - k * std(val-EX).
-Ngưỡng: confidence nhỏ nhất sao cho precision trên val >= target, tức là coverage lớn nhất.
+Độ ổn định: gom theo (lr, epoch) qua các seed, điểm = mean(val-acc) - k * std(val-acc).
+Ngưỡng: confidence nhỏ nhất sao cho precision trên val >= target, tức là coverage tự động lớn nhất.
 """
 
 import csv
@@ -14,7 +15,7 @@ import statistics
 from collections import defaultdict
 
 from src.common import OUTPUTS, REPORTS, lineage_tags, params, read_jsonl, setup_mlflow, write_json
-from src.evaluate import choose_threshold, selective_metrics, threshold_curve
+from src.metrics import choose_threshold, per_intent, selective_metrics, threshold_curve, top_confusions
 
 
 def diagnose(rows, s):
@@ -22,17 +23,18 @@ def diagnose(rows, s):
     for r in rows:
         by_run[r["run"]].append(r)
     for run_rows in by_run.values():
-        run_rows.sort(key=lambda r: r["epoch"])
+        run_rows.sort(key=lambda r: r["step"])
         prev = None
         for r in run_rows:
             flags = []
-            if r["train_ex"] < s["underfit_train_ex"]:
+            if r["train_acc"] < s["underfit_train_acc"]:
                 flags.append("underfit")
-            if r["gap_train_val_ex"] > s["overfit_gap"]:
+            if r["gap_train_val_acc"] > s["overfit_gap"]:
                 flags.append("overfit:gap")
-            if prev and r["val_loss"] and prev["val_loss"] and r["val_loss"] > prev["val_loss"] \
-                    and r["val_ex"] < prev["val_ex"]:
+            if prev and r["val_nll"] > prev["val_nll"] and r["val_acc"] < prev["val_acc"]:
                 flags.append("overfit:val_worse")
+            if r["val_ece"] > s["max_val_ece"]:
+                flags.append("miscalibrated")
             r["diagnosis"] = ",".join(flags) or "ok"
             prev = r
     return rows
@@ -44,10 +46,10 @@ def stability(rows, k):
         groups[(r["lr"], r["epoch"])].append(r)
     out = []
     for (lr, epoch), g in groups.items():
-        exs = [r["val_ex"] for r in g]
-        std = statistics.pstdev(exs) if len(exs) > 1 else 0.0
-        out.append({"lr": lr, "epoch": epoch, "n_seeds": len(g), "val_ex_mean": statistics.mean(exs),
-                    "val_ex_std": std, "val_ex_min": min(exs), "score": statistics.mean(exs) - k * std,
+        accs = [r["val_acc"] for r in g]
+        std = statistics.pstdev(accs) if len(accs) > 1 else 0.0
+        out.append({"lr": lr, "epoch": epoch, "n_seeds": len(g), "val_acc_mean": statistics.mean(accs),
+                    "val_acc_std": std, "val_acc_min": min(accs), "score": statistics.mean(accs) - k * std,
                     "all_ok": all(r["diagnosis"] == "ok" for r in g), "rows": g})
     return sorted(out, key=lambda x: -x["score"])
 
@@ -68,27 +70,33 @@ def main():
 
     pool = [g for g in groups if g["all_ok"]] or groups  # ưu tiên nhóm không có dấu hiệu under/overfit
     best_group = pool[0]
-    chosen = max(best_group["rows"], key=lambda r: r["val_ex"])
+    chosen = max(best_group["rows"], key=lambda r: r["val_acc"])
 
     scored = read_jsonl(OUTPUTS / "preds" / chosen["run"] / chosen["checkpoint"] / "val.jsonl")
     thr = choose_threshold(scored, s["target_precision"])
     curve = threshold_curve(scored)
+    weak = per_intent(scored)[:8]
+    conf = top_confusions(scored, 8)
 
     # ---- báo cáo
-    run_cols = ["run", "lr", "seed", "epoch", "train_loss", "val_loss", "train_ex", "val_ex", "gap_train_val_ex",
-                "val_ex_easy", "val_ex_medium", "val_ex_hard", "val_ex_extra", "val_exec_error_rate",
+    run_cols = ["run", "lr", "seed", "epoch", "train_loss", "val_nll", "train_acc", "val_acc", "gap_train_val_acc",
+                "val_macro_f1", "val_scenario_acc", "val_acc_agree3", "val_ece", "val_brier",
                 "val_mean_confidence", "diagnosis"]
-    rows.sort(key=lambda r: (r["lr"], r["seed"], r["epoch"]))
-    grp_cols = ["lr", "epoch", "n_seeds", "val_ex_mean", "val_ex_std", "val_ex_min", "score", "all_ok"]
+    rows.sort(key=lambda r: (r["lr"], r["seed"], r["step"]))
+    grp_cols = ["lr", "epoch", "n_seeds", "val_acc_mean", "val_acc_std", "val_acc_min", "score", "all_ok"]
     report = [
         "# Bảng val\n", "## Từng checkpoint\n", md_table(rows, run_cols),
         "\n\n## Độ ổn định theo cấu hình (gom các seed)\n", md_table(groups, grp_cols),
+        "\n\n## Intent yếu nhất (checkpoint được chọn)\n", md_table(weak, ["intent", "n", "recall", "precision", "f1"]),
+        "\n\n## Nhầm lẫn nhiều nhất (vàng -> dự đoán)\n",
+        "\n".join(f"- {g} -> {p}: {n}" for g, p, n in conf) or "- (không có)",
         f"\n\n## Lựa chọn\n- Cấu hình: lr={best_group['lr']:g}, epoch={best_group['epoch']} "
-        f"(score={best_group['score']:.4f}, mean={best_group['val_ex_mean']:.4f} ± {best_group['val_ex_std']:.4f})",
-        f"- Checkpoint: `{chosen['model_path']}` (val-EX={chosen['val_ex']:.4f}, chẩn đoán: {chosen['diagnosis']})",
+        f"(score={best_group['score']:.4f}, mean={best_group['val_acc_mean']:.4f} ± {best_group['val_acc_std']:.4f})",
+        f"- Checkpoint: `{chosen['checkpoint_path']}` (val-acc={chosen['val_acc']:.4f}, "
+        f"ECE={chosen['val_ece']:.4f}, chẩn đoán: {chosen['diagnosis']})",
         f"- Ngưỡng confidence: {thr['threshold']:.4f} -> precision={thr['precision']:.4f}, "
-        f"coverage={thr['coverage']:.4f} trên val (target {s['target_precision']}, "
-        f"{'đạt' if thr['target_reached'] else 'KHÔNG đạt'})",
+        f"coverage tự động={thr['coverage']:.4f} trên val (target {s['target_precision']}, "
+        f"{'đạt' if thr['target_reached'] else 'KHÔNG đạt'}); phần còn lại chuyển người.",
     ]
     if not best_group["all_ok"]:
         report.append("- ⚠️ Không cấu hình nào sạch hoàn toàn; xem cột diagnosis trước khi dùng.")
@@ -104,23 +112,24 @@ def main():
         w.writerows(curve)
 
     selection = {
-        "run": chosen["run"], "checkpoint": chosen["checkpoint"], "model_path": chosen["model_path"],
+        "run": chosen["run"], "checkpoint": chosen["checkpoint"], "checkpoint_path": chosen["checkpoint_path"],
         "mlflow_run_id": chosen["mlflow_run_id"], "lr": chosen["lr"], "seed": chosen["seed"],
         "epoch": chosen["epoch"], "diagnosis": chosen["diagnosis"],
-        "val_ex": chosen["val_ex"], "val_metrics": {k: v for k, v in chosen.items() if k.startswith("val_")},
+        "val_acc": chosen["val_acc"], "val_metrics": {k: v for k, v in chosen.items() if k.startswith("val_")},
         "stability": {k: best_group[k] for k in grp_cols},
         "threshold": thr, "val_at_threshold": selective_metrics(scored, thr["threshold"]),
         "target_precision": s["target_precision"],
     }
     write_json(REPORTS / "selection.json", selection)
 
-    mlflow = setup_mlflow("text2sql-train")
+    mlflow = setup_mlflow("intent-train")
     with mlflow.start_run(run_name="selection"):
         mlflow.set_tags({**lineage_tags(), "stage": "select", "selected_run_id": chosen["mlflow_run_id"]})
         mlflow.log_params({"chosen_run": chosen["run"], "chosen_checkpoint": chosen["checkpoint"],
                            "threshold": thr["threshold"]})
-        mlflow.log_metrics({"val_ex": chosen["val_ex"], "val_precision_at_thr": thr["precision"],
-                            "val_coverage_at_thr": thr["coverage"], "stability_score": best_group["score"]})
+        mlflow.log_metrics({"val_acc": chosen["val_acc"], "val_ece": chosen["val_ece"],
+                            "val_precision_at_thr": thr["precision"], "val_coverage_at_thr": thr["coverage"],
+                            "stability_score": best_group["score"]})
         for f in ("val_table.md", "val_table.csv", "threshold_curve.csv", "selection.json"):
             mlflow.log_artifact(str(REPORTS / f))
     with mlflow.start_run(run_id=chosen["mlflow_run_id"]):

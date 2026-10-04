@@ -1,20 +1,8 @@
-# Pipeline (CPU: fetch / prepare / check_data chỉ cần nhóm này)
+# CPU (laptop): fetch / prepare / check_data. clef-finetune cài riêng KHÔNG kèm dependency (tránh kéo torch):
+#   pip install -r requirements.txt
+#   pip install --no-deps "clef-finetune @ git+https://github.com/MersivMedia/clef-finetune@c83f7bc1acc23c81ad0de838510c59c48bf60c79"
 dvc>=3.60
 dvc-gdrive          # DVC remote trên Google Drive
 mlflow>=3.5
 pyyaml
 pandas
-gdown
-
-# Train / inference (GPU)
-torch>=2.5
-transformers>=5.16
-trl
-peft
-datasets
-accelerate
-# Kernel nhanh cho lớp Gated DeltaNet của Qwen3.5 (không có thì fallback PyTorch, chậm hơn nhiều)
-flash-linear-attention
-causal-conv1d
-# Tuỳ chọn: generation.backend: vllm
-# vllm

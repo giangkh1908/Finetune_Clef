@@ -1,13 +1,13 @@
-"""Stage `train`: grid hyperparam x nhiều seed trên base model mà bakeoff chọn.
-Mỗi tổ hợp là một MLflow run (loss train/val theo step, lineage dữ liệu), checkpoint lưu mỗi epoch.
-Run đã train xong (có file DONE) được bỏ qua, nên có thể chạy tiếp khi máy thuê bị ngắt.
+"""Stage `train`: grid lr x nhiều seed trên Clef(-flash) bằng clef-finetune (LoRA + joint schema head).
+Mỗi tổ hợp là một MLflow run (loss theo step, lineage dữ liệu + schema), checkpoint (adapter + head) lưu mỗi epoch.
+Run đã xong (có file DONE) được bỏ qua; run dở dang chạy tiếp từ checkpoint mới nhất (máy thuê bị ngắt).
 """
 
 import itertools
 import json
 
-from src.common import OUTPUTS, REPORTS, lineage_tags, load_split, params, setup_mlflow, write_json
-from src.sft import build_trainer, load_base
+from src.common import OUTPUTS, REPORTS, ROOT, lineage_tags, load_split, params, read_jsonl, setup_mlflow, write_json
+from src.finetune import build_cfg, free_gpu, run, steps_per_epoch
 
 
 def run_name(lr, seed):
@@ -17,10 +17,10 @@ def run_name(lr, seed):
 def main():
     P = params()
     t = P["train"]
-    base, method = t["base_model"], t["method"]  # quyết định từ bakeoff, ghi trong params.yaml
-    train, val = load_split("train"), load_split("val")
+    base = t["base_model"]  # quyết định từ bakeoff, ghi trong params.yaml
+    train = load_split("train")
 
-    mlflow = setup_mlflow("text2sql-train")
+    mlflow = setup_mlflow("intent-train")
     runs = []
     for lr, seed in itertools.product(t["grid"]["lr"], t["seeds"]):
         name = run_name(lr, seed)
@@ -29,31 +29,27 @@ def main():
             print(f"bỏ qua {name} (đã xong)")
             runs.append(json.loads((out / "DONE").read_text()))
             continue
-        with mlflow.start_run(run_name=name) as run:
-            mlflow.set_tags({**lineage_tags(), "stage": "train", "base_model": base, "method": method})
-            hp = {"epochs": t["epochs"], "lr": lr, "batch_size": t["batch_size"], "grad_accum": t["grad_accum"],
-                  "max_length": t["max_length"], "warmup_ratio": t["warmup_ratio"],
-                  "weight_decay": t["weight_decay"], "seed": seed, "save": True}
-            mlflow.log_params({**hp, "base_model": base, "method": method})
-            model, tok = load_base(base, method, t["lora"])
-            trainer = build_trainer(model, tok, train, val, str(out), hp)
-            mlflow.log_params({"skipped_long_train": trainer.n_skipped["train"],
-                               "skipped_long_val": trainer.n_skipped["val"]})
-            trainer.train()
-            for ck in sorted(out.glob("checkpoint-*")):
-                tok.save_pretrained(ck)
-                if hasattr(trainer.model, "merge_and_unload"):  # LoRA: lưu bản merge để Engine load thẳng
-                    from peft import AutoPeftModelForCausalLM
-                    AutoPeftModelForCausalLM.from_pretrained(ck).merge_and_unload().save_pretrained(ck / "merged")
-                    tok.save_pretrained(ck / "merged")
-            info = {"run": name, "lr": lr, "seed": seed, "mlflow_run_id": run.info.run_id,
-                    "base_model": base, "method": method, "dir": str(out.relative_to(OUTPUTS.parent))}
+        cfg = build_cfg(P, train, out, lr=lr, seed=seed, epochs=t["epochs"])
+        resume = any(out.glob("checkpoint-*"))
+        with mlflow.start_run(run_name=name) as mrun:
+            mlflow.set_tags({**lineage_tags(), "stage": "train", "base_model": base, "method": "lora+head"})
+            mlflow.log_params({"lr": lr, "seed": seed, "epochs": t["epochs"], "base_model": base,
+                               "base_revision": t["base_revision"], "max_steps": cfg["train"]["max_steps"],
+                               "grad_accum": t["grad_accum"], "lora_r": t["lora"]["r"], "lora_alpha": t["lora"]["alpha"],
+                               "head_lr": cfg["train"]["head_lr"], "label_smoothing": t["label_smoothing"],
+                               "brier_weight": t["brier_weight"], "resumed": resume,
+                               **{f"augment.{k}": v for k, v in t["augment"].items()}})
+            res = run(cfg, resume=resume)
+            for h in read_jsonl(out / "train_log.jsonl"):
+                mlflow.log_metrics({k: h[k] for k in ("loss", "ce", "brier", "grad_norm", "lr") if k in h},
+                                   step=h["step"])
+            info = {"run": name, "lr": lr, "seed": seed, "mlflow_run_id": mrun.info.run_id, "base_model": base,
+                    "steps_per_epoch": steps_per_epoch(len(train), t["grad_accum"]),
+                    "lora_targets": res["lora_targets"], "dir": str(out.relative_to(ROOT))}
             (out / "DONE").write_text(json.dumps(info))
             runs.append(info)
-            del trainer, model
-            import gc, torch
-            gc.collect()
-            torch.cuda.empty_cache()
+        (out / "train.clef.jsonl").unlink(missing_ok=True)  # dựng lại được từ data/ + schema/
+        free_gpu()
 
     write_json(REPORTS / "train_runs.json", runs)
 

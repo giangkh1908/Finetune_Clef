@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from src.common import (GOLDEN_FILE, REPORTS, file_md5, lineage_tags, params, read_jsonl, setup_mlflow,
                         write_json, write_jsonl)
-from src.evaluate import LEVELS, score_rows, selective_metrics, summarize
+from src.metrics import per_intent, score_rows, selective_metrics, summarize, top_confusions
 
 GOLDEN_DIR = REPORTS / "golden"
 HISTORY = GOLDEN_DIR / "history"
@@ -28,22 +28,27 @@ def next_actions(result, sel, gcfg, target):
     acts = []
     diag = sel["diagnosis"]
     if "underfit" in diag:
-        acts.append("Underfit trên train: tăng epoch hoặc lr, hoặc dùng model lớn hơn (xem reports/bakeoff.md).")
+        acts.append("Underfit trên train: tăng epoch hoặc lr, tăng lora.r, hoặc thử Clef 27B (xem reports/bakeoff.md).")
     if "overfit" in diag:
-        acts.append("Overfit (train-EX cao, val kém): giảm epoch hoặc lr, tăng weight_decay, thêm dữ liệu train đa dạng "
-                    "hơn (vd. gretelai/synthetic_text_to_sql).")
-    if sel["stability"]["val_ex_std"] > 0.01:
-        acts.append(f"Kết quả dao động giữa các seed (std={sel['stability']['val_ex_std']:.3f}): giảm lr, thêm seed để "
-                    "chọn chắc hơn.")
-    if result["ex_drop_vs_val"] > gcfg["max_ex_drop_vs_val"]:
-        acts.append("Golden-EX thấp hơn val-EX nhiều: lựa chọn đã quá khớp val hoặc val không đại diện. KHÔNG chỉnh "
+        acts.append("Overfit (train-acc cao, val kém): giảm epoch hoặc lr, tăng augmentation (paraphrase/rename), "
+                    "thêm dữ liệu gán nhãn thật.")
+    if "miscalibrated" in diag:
+        acts.append("ECE cao: tăng train.brier_weight / label_smoothing, hoặc calibrate nhiệt độ trên val.")
+    if sel["stability"]["val_acc_std"] > 0.01:
+        acts.append(f"Kết quả dao động giữa các seed (std={sel['stability']['val_acc_std']:.3f}): giảm lr, thêm seed "
+                    "để chọn chắc hơn.")
+    if result["acc_drop_vs_val"] > gcfg["max_acc_drop_vs_val"]:
+        acts.append("Golden-acc thấp hơn val-acc nhiều: lựa chọn đã quá khớp val hoặc val không đại diện. KHÔNG chỉnh "
                     "theo golden; mở rộng val hoặc giảm số cấu hình thử trên val.")
     if target - result["golden_precision_at_thr"] > gcfg["max_precision_drop"]:
         acts.append("Metric ổn nhưng quyết định sai: ngưỡng chọn trên val không chuyển giao. Calibrate lại trên val "
                     "(tăng target_precision, hoặc cải thiện confidence), rồi chấm golden ở milestone mới.")
-    weak = min(LEVELS, key=lambda k: result.get(f"golden_ex_{k}", 1.0))
-    acts.append(f"Nhóm yếu nhất trên golden: {weak} (EX={result.get(f'golden_ex_{weak}', float('nan')):.3f}). "
-                "Xem reports/golden/<milestone>.errors.jsonl để phân loại lỗi (sai bảng/cột, JOIN, giá trị, lồng).")
+    if result.get("golden_acc_agree3") and result["golden_acc_agree3"] - result["golden_acc"] > 0.03:
+        acts.append("Acc trên câu cả 3 người chấm đồng ý cao hơn hẳn: một phần lỗi do nhãn MASSIVE mơ hồ. Cân nhắc "
+                    "prepare.min_agree_train hoặc gán nhãn lại.")
+    weak = ", ".join(f"{w['intent']} (f1={w['f1']:.2f})" for w in result["weakest_intents"][:5])
+    acts.append(f"Intent yếu nhất trên golden: {weak}. Sửa mô tả trong schema/massive_intent.yaml cho các cặp hay "
+                "nhầm (xem reports/golden/<milestone>.errors.jsonl), hoặc gán nhãn thêm cho chúng.")
     return acts
 
 
@@ -72,7 +77,7 @@ def main():
         sys.exit(f"Milestone {ms} đã dùng golden cho v{prev['model_version']}. Model mới (v{version}) phải thuộc "
                  f"milestone mới: đổi milestone.id trong params.yaml (vd. dvc exp run -S milestone.id=M2).")
 
-    mlflow = setup_mlflow("text2sql-golden")
+    mlflow = setup_mlflow("intent-golden")
     from mlflow import MlflowClient
 
     client = MlflowClient()
@@ -84,28 +89,30 @@ def main():
     model = mlflow.pyfunc.load_model(f"models:/{name}/{version}")
     impl = model.unwrap_python_model()
     golden = read_jsonl(GOLDEN_FILE)
-    scored = score_rows(impl.engine.predict(golden))
+    scored = score_rows(impl.predict_rows(golden))
     m = summarize(scored, "golden_")
     s = selective_metrics(scored, impl.threshold)
 
-    val_ex = float(mv.tags.get("val_ex", sel["val_ex"]))
+    val_acc = float(mv.tags.get("val_acc", sel["val_acc"]))
     result = {
         "milestone": ms, "note": note, "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model": f"{name}/v{version}", "model_version": version, **m,
         "threshold": impl.threshold, "golden_precision_at_thr": s["precision"], "golden_coverage_at_thr": s["coverage"],
-        "val_ex": val_ex, "ex_drop_vs_val": val_ex - m["golden_ex"],
+        "val_acc": val_acc, "acc_drop_vs_val": val_acc - m["golden_acc"],
         "val_precision_at_thr": sel["threshold"]["precision"], "golden_md5": golden_md5,
+        "weakest_intents": per_intent(scored)[:8],
+        "top_confusions": top_confusions(scored, 10),
     }
-    result["pass_ex"] = result["ex_drop_vs_val"] <= gcfg["max_ex_drop_vs_val"]
+    result["pass_acc"] = result["acc_drop_vs_val"] <= gcfg["max_acc_drop_vs_val"]
     result["pass_threshold"] = target - s["precision"] <= gcfg["max_precision_drop"]
-    result["promoted_to_champion"] = result["pass_ex"] and result["pass_threshold"]
+    result["promoted_to_champion"] = result["pass_acc"] and result["pass_threshold"]
 
     # Champion hiện tại (nếu có) phải bị vượt trên golden thì mới thay.
     try:
         champ = client.get_model_version_by_alias(name, "champion")
-        champ_ex = float(champ.tags.get("golden_ex", "nan"))
-        result["prev_champion"] = f"v{champ.version} (golden_ex={champ_ex:.4f})"
-        if champ.version != version and not m["golden_ex"] > champ_ex:
+        champ_acc = float(champ.tags.get("golden_acc", "nan"))
+        result["prev_champion"] = f"v{champ.version} (golden_acc={champ_acc:.4f})"
+        if champ.version != version and not m["golden_acc"] > champ_acc:
             result["promoted_to_champion"] = False
             result["not_promoted_reason"] = "không vượt champion hiện tại"
     except Exception:  # noqa: BLE001 - chưa có champion
@@ -113,10 +120,12 @@ def main():
 
     acts = next_actions(result, sel, gcfg, target)
     md = [f"# {ms}: {result['model']}", f"_{note}_\n",
-          f"- golden-EX **{m['golden_ex']:.4f}** | val-EX {val_ex:.4f} | chênh {result['ex_drop_vs_val']:+.4f}",
+          f"- golden-acc **{m['golden_acc']:.4f}** | val-acc {val_acc:.4f} | chênh {result['acc_drop_vs_val']:+.4f}",
+          f"- macro-F1 {m['golden_macro_f1']:.4f} | scenario-acc {m['golden_scenario_acc']:.4f} | "
+          f"acc (nhãn 3/3 đồng ý) {m.get('golden_acc_agree3', float('nan')):.4f} | ECE {m['golden_ece']:.4f}",
           f"- Ngưỡng {impl.threshold:.4f}: precision golden {s['precision']:.4f} (val {sel['threshold']['precision']:.4f}, "
-          f"target {target}), coverage {s['coverage']:.4f}",
-          "- Theo độ khó: " + ", ".join(f"{k}={m.get(f'golden_ex_{k}', 0):.3f}" for k in LEVELS),
+          f"target {target}), tự động xử lý {s['coverage']:.1%}, chuyển người {1 - s['coverage']:.1%}",
+          "- Nhầm nhiều nhất: " + "; ".join(f"{g}->{p} ({n})" for g, p, n in result["top_confusions"][:5]),
           f"- Quyết định: **{'PROMOTE champion' if result['promoted_to_champion'] else 'KHÔNG promote'}**"
           + (f" ({result.get('not_promoted_reason')})" if result.get("not_promoted_reason") else ""),
           "\n## Vòng sau nên làm", *[f"{i}. {a}" for i, a in enumerate(acts, 1)],
@@ -129,10 +138,11 @@ def main():
     (HISTORY / f"{ms}.next_action.md").write_text(md_text, encoding="utf-8")
     shutil.copy(hist, out_path)
     (REPORTS / "next_action.md").write_text(md_text, encoding="utf-8")
-    write_jsonl(GOLDEN_DIR / f"{ms}.errors.jsonl", [r for r in scored if not r["correct"]])
+    write_jsonl(GOLDEN_DIR / f"{ms}.errors.jsonl", [{k: v for k, v in r.items() if k != "probs"}
+                                                 for r in scored if not r["correct"]])
 
-    cols = ["milestone", "time", "model", "golden_ex", *[f"golden_ex_{k}" for k in LEVELS], "val_ex",
-            "ex_drop_vs_val", "threshold", "golden_precision_at_thr", "golden_coverage_at_thr",
+    cols = ["milestone", "time", "model", "golden_acc", "golden_macro_f1", "golden_scenario_acc", "golden_ece",
+            "val_acc", "acc_drop_vs_val", "threshold", "golden_precision_at_thr", "golden_coverage_at_thr",
             "promoted_to_champion", "note"]
     new = not LEDGER.exists()
     with open(LEDGER, "a", newline="", encoding="utf-8") as f:
@@ -143,10 +153,10 @@ def main():
 
     with mlflow.start_run(run_name=f"golden-{ms}"):
         mlflow.set_tags({**lineage_tags(), "stage": "golden", "milestone": ms, "model_version": version})
-        mlflow.log_metrics({k: float(v) for k, v in result.items() if isinstance(v, (int, float))})
+        mlflow.log_metrics({k: float(v) for k, v in result.items() if isinstance(v, (int, float)) and k != "model_version"})
         mlflow.log_artifact(str(hist))
         mlflow.log_artifact(str(HISTORY / f"{ms}.next_action.md"))
-    for k in ("golden_ex", "golden_precision_at_thr", "golden_coverage_at_thr"):
+    for k in ("golden_acc", "golden_precision_at_thr", "golden_coverage_at_thr"):
         client.set_model_version_tag(name, version, k, f"{result[k]:.4f}")
     client.set_model_version_tag(name, version, "golden_milestone", ms)
     if result["promoted_to_champion"]:

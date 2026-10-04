@@ -1,54 +1,49 @@
-"""Stage `fetch`: tải dữ liệu nguồn ở version cố định. DVC băm toàn bộ byte đầu ra vào dvc.lock."""
+"""Stage `fetch`: tải MASSIVE 1.1 (Amazon, CC-BY-4.0) ở version cố định, chỉ giữ locale cần dùng.
 
+Repo HF `AmazonScience/massive` dùng loading script (datasets >= 4 không chạy được), nên tải thẳng tarball gốc
+trên S3 mà script đó trỏ tới, kiểm tra sha256 rồi mới giải nén. DVC băm byte đầu ra vào dvc.lock.
+"""
+
+import hashlib
 import shutil
-import subprocess
-import zipfile
+import tarfile
+import urllib.request
 
 from src.common import RAW, params, write_json
 
-KEEP_SPIDER = ["database", "tables.json", "train_spider.json", "train_others.json", "dev.json", "README.txt"]
 
-
-def fetch_vitext2sql(repo: str, commit: str):
-    dst = RAW / "ViText2SQL"
-    shutil.rmtree(dst, ignore_errors=True)
-    subprocess.run(["git", "clone", "--quiet", repo, str(dst)], check=True)
-    subprocess.run(["git", "-C", str(dst), "checkout", "--quiet", commit], check=True)
-
-    def _force_remove(func, path, _):  # object của git là read-only trên Windows
-        import os
-        os.chmod(path, 0o666)
-        func(path)
-
-    shutil.rmtree(dst / ".git", onerror=_force_remove)
-
-
-def fetch_spider(gdrive_id: str):
-    import gdown
-
-    zip_path = RAW / "spider_data.zip"
-    gdown.download(id=gdrive_id, output=str(zip_path), quiet=True)
-    tmp = RAW / "_spider_tmp"
-    shutil.rmtree(tmp, ignore_errors=True)
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(tmp)
-    src = tmp / "spider_data"
-    dst = RAW / "spider"
-    shutil.rmtree(dst, ignore_errors=True)
-    dst.mkdir()
-    for name in KEEP_SPIDER:  # bỏ test_database (Spider test) để giảm dung lượng, pipeline không dùng
-        shutil.move(str(src / name), str(dst / name))
-    shutil.rmtree(tmp)
-    zip_path.unlink()
+def sha256(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def main():
     p = params()["fetch"]
-    RAW.mkdir(exist_ok=True)
-    fetch_vitext2sql(p["vitext2sql_repo"], p["vitext2sql_commit"])
-    fetch_spider(p["spider_gdrive_id"])
-    write_json(RAW / "SOURCES.json", p)
-    print("fetch xong:", sorted(x.name for x in RAW.iterdir()))
+    dst = RAW / "massive"
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    tgz = RAW / "_massive.tar.gz"
+    urllib.request.urlretrieve(p["massive_url"], tgz)
+    got = sha256(tgz)
+    if got != p["massive_sha256"]:
+        tgz.unlink()
+        raise SystemExit(f"sha256 lệch: {got} != {p['massive_sha256']} -> nguồn đã đổi, không dùng.")
+
+    wanted = {f"1.1/data/{p['locale']}.jsonl", "1.1/LICENSE", "1.1/NOTICE.md", "1.1/CITATION.md"}
+    with tarfile.open(tgz) as t:
+        for m in t.getmembers():
+            if m.name in wanted:
+                m.name = m.name.split("/")[-1]
+                t.extract(m, dst, filter="data")
+    tgz.unlink()
+    missing = {w.split("/")[-1] for w in wanted} - {x.name for x in dst.iterdir()}
+    if missing:
+        raise SystemExit(f"tarball thiếu {missing}")
+    write_json(RAW / "SOURCES.json", {**p, "license": "CC-BY-4.0"})
+    print("fetch xong:", sorted(x.name for x in dst.iterdir()))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 #   fetch -> prepare -> check_data -> sanity -> train -> eval_val -> select -> register -> golden
 # Bakeoff (chọn base model) NGOÀI vòng lặp: `dvc repro bakeoff/dvc.yaml`, quyết định ghi vào train.base_model.
 # Golden chấm đúng 1 lần mỗi milestone (model đã chọn trên val), quyết định promote + ghi reports/next_action.md.
-# Vòng sau: đổi params.yaml (milestone.id mới + thay đổi) rồi `dvc repro` -> DVC chỉ chạy lại stage bị ảnh hưởng.
+# Vòng sau: đổi params.yaml / schema/ (milestone.id mới + thay đổi) rồi `dvc repro` -> chỉ chạy lại stage bị ảnh hưởng.
 #
 #   dvc repro check_data      # CPU, chạy được trên laptop
 #   dvc repro sanity          # GPU, vài phút: overfit 50 mẫu
@@ -17,19 +17,17 @@ stages:
     params:
       - fetch
     outs:
-      - raw/ViText2SQL
-      - raw/spider
+      - raw/massive
       - raw/SOURCES.json
 
   prepare:
     cmd: python -m src.prepare
     deps:
       - src/prepare.py
-      - src/sql_utils.py
       - src/common.py
-      - raw/ViText2SQL
-      - raw/spider
+      - raw/massive
     params:
+      - fetch.locale
       - prepare
     outs:
       - data/train.jsonl
@@ -44,12 +42,16 @@ stages:
     cmd: python -m src.check_data
     deps:
       - src/check_data.py
-      - src/evaluate.py
-      - src/sql_utils.py
+      - src/metrics.py
+      - src/records.py
+      - schema/massive_intent.yaml
       - data/train.jsonl
       - data/train_probe.jsonl
       - data/val.jsonl
       - data/golden/golden.jsonl
+    params:
+      - check
+      - prepare.split
     metrics:
       - reports/checks.json:
           cache: false
@@ -58,17 +60,19 @@ stages:
     cmd: python -m src.sanity
     deps:
       - src/sanity.py
-      - src/sft.py
-      - src/engine.py
-      - src/prompting.py
-      - src/evaluate.py
+      - src/finetune.py
+      - src/engines.py
+      - src/records.py
+      - src/metrics.py
+      - schema/massive_intent.yaml
       - data/train.jsonl
-      - reports/checks.json
+      - reports/checks.json     # cổng chặn: chỉ chạy khi check_data đã pass
     params:
       - sanity
+      - eval
       - train.base_model
-      - train.max_length
-      - generation
+      - train.base_revision
+      - train.lora
     metrics:
       - reports/sanity.json:
           cache: false
@@ -80,13 +84,15 @@ stages:
     cmd: python -m src.train
     deps:
       - src/train.py
-      - src/sft.py
-      - src/prompting.py
+      - src/finetune.py
+      - src/records.py
+      - schema/massive_intent.yaml
+      - schema/paraphrases.yaml
       - data/train.jsonl
-      - data/val.jsonl
       - reports/sanity.json     # cổng chặn: train chỉ chạy sau khi sanity đã pass
     params:
       - train
+      - eval.max_length
     outs:
       - outputs/runs:
           cache: false
@@ -98,13 +104,13 @@ stages:
     cmd: python -m src.eval_val
     deps:
       - src/eval_val.py
-      - src/engine.py
-      - src/evaluate.py
+      - src/engines.py
+      - src/metrics.py
       - data/val.jsonl
       - data/train_probe.jsonl
       - reports/train_runs.json
     params:
-      - generation
+      - eval
     outs:
       - outputs/preds:
           cache: false
@@ -116,7 +122,7 @@ stages:
     cmd: python -m src.select_model
     deps:
       - src/select_model.py
-      - src/evaluate.py
+      - src/metrics.py
       - reports/val_metrics.json
     params:
       - select
@@ -136,10 +142,12 @@ stages:
     deps:
       - src/register.py
       - src/serving.py
+      - schema
       - reports/selection.json
     params:
       - project
       - train.base_model
+      - train.base_revision
     outs:
       - reports/registered.json:
           cache: false
@@ -149,7 +157,7 @@ stages:
     cmd: python -m src.golden_eval
     deps:
       - src/golden_eval.py
-      - src/evaluate.py
+      - src/metrics.py
       - reports/registered.json
       - data/golden/golden.jsonl
     params:
@@ -166,4 +174,4 @@ plots:
   - reports/threshold_curve.csv:
       x: coverage
       y: precision
-      title: Precision vs coverage trên val (chọn ngưỡng)
+      title: Precision vs coverage tự động trên val (chọn ngưỡng)

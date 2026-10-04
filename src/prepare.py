@@ -1,114 +1,122 @@
-"""Stage `prepare`: tạo train / val / golden.
+"""Stage `prepare`: MASSIVE vi-VN (gộp cả train/dev/test gốc) -> chia lại train / val / golden + train_probe.
 
-ViText2SQL dịch cả tên bảng/cột sang tiếng Việt nên SQL của nó không chạy được trên DB nào. Nhưng thứ tự câu
-trong từng DB trùng 1-1 với Spider, nên ghép theo vị trí để lấy lại schema + SQL gốc tiếng Anh chạy được.
+Tỷ lệ (params.yaml: prepare.split):
+  100% dữ liệu -> golden 15%  |  85% còn lại -> train 82%, val 18%   (≈ 69.7% / 15.3% / 15% tổng)
+Cách chia:
+  - Phân tầng theo intent: intent nào cũng có mặt ở cả 3 tập với tỷ lệ như trên.
+  - Gom theo câu đã chuẩn hoá: câu trùng chữ (vd. "tăng âm lượng" xuất hiện nhiều lần) luôn nằm cùng một tập,
+    nên val/golden không chứa câu đã thấy trong train (split gốc của MASSIVE có ~5% trùng như vậy).
+  - Không còn so được 1-1 với số công bố trên split gốc của MASSIVE; `orig_partition` được giữ lại để đối chiếu.
+Request đầy đủ cho Clef (state + 60 lựa chọn intent) được dựng lúc chạy bởi src/records.py.
 
-Ánh xạ split (giữ nguyên cách chia của ViText2SQL, 3 tập không dùng chung database):
-    ViText2SQL train -> train   (fine-tune)
-    ViText2SQL dev   -> val     (chọn hyperparam, checkpoint, ngưỡng)
-    ViText2SQL test  -> golden  (chấm 1 lần mỗi milestone)
+Meta mỗi câu:
+  agree         : số người chấm (0-3) của MASSIVE xác nhận intent đúng -> đo trần chất lượng nhãn
+  seen_in_train : câu (đã chuẩn hoá) có y hệt trong train (sau khi gom nhóm phải luôn là False; check_data kiểm tra)
 """
 
 import json
 import random
 from collections import Counter, defaultdict
 
-from src.common import DB_DIR, GOLDEN_FILE, RAW, REPORTS, SPLIT_FILES, params, write_json, write_jsonl
-from src.sql_utils import build_schema, execute, hardness, normalize_sql
-
-VI_TO_SPLIT = {"train": "train", "dev": "val", "test": "golden"}
+from src.common import GOLDEN_FILE, RAW, REPORTS, SPLIT_FILES, params, write_json, write_jsonl
 
 
-def load(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+def norm_text(s: str) -> str:
+    return " ".join(s.lower().split())
 
 
-def strip_values(o):
-    if isinstance(o, dict):
-        return {k: strip_values(v) for k, v in o.items()}
-    if isinstance(o, list):
-        return [strip_values(x) for x in o]
-    if isinstance(o, str):
-        return "V"
-    if isinstance(o, float):
-        return "N"
-    return o
+def split_groups(rows: list[dict], golden_frac: float, val_frac_of_rest: float, seed: int) -> dict:
+    """Chia theo nhóm câu trùng chữ, phân tầng theo intent (intent đa số của nhóm)."""
+    groups = defaultdict(list)
+    for r in rows:
+        groups[norm_text(r["text"])].append(r)
+    by_intent = defaultdict(list)
+    for key in sorted(groups):
+        g = groups[key]
+        by_intent[Counter(r["intent"] for r in g).most_common(1)[0][0]].append(g)
 
-
-def same_structure(a, b) -> bool:
-    return json.dumps(strip_values(a), sort_keys=True) == json.dumps(strip_values(b), sort_keys=True)
-
-
-def db_path(db_id):
-    return DB_DIR / db_id / f"{db_id}.sqlite"
+    rng = random.Random(seed)
+    out = {"train": [], "val": [], "golden": []}
+    for intent in sorted(by_intent):
+        gs = by_intent[intent]
+        rng.shuffle(gs)
+        n = sum(len(g) for g in gs)
+        n_golden = round(n * golden_frac)
+        n_val = round((n - n_golden) * val_frac_of_rest)
+        taken = {"golden": 0, "val": 0}
+        for g in gs:
+            if taken["golden"] < n_golden:
+                dst = "golden"
+            elif taken["val"] < n_val:
+                dst = "val"
+            else:
+                dst = "train"
+            if dst != "train":
+                taken[dst] += len(g)
+            out[dst].extend(g)
+    for v in out.values():
+        v.sort(key=lambda r: r["id"])
+    return out
 
 
 def main():
-    p = params()["prepare"]
-    sp_dir = RAW / "spider"
-    vi_dir = RAW / "ViText2SQL" / "data" / p["level"]
+    P = params()
+    p = P["prepare"]
+    src = RAW / "massive" / f"{P['fetch']['locale']}.jsonl"
+    rows = []
+    with open(src, encoding="utf-8") as f:
+        for line in f:
+            r = json.loads(line)
+            rows.append({
+                "id": f"{r['locale']}-{r['id']}",
+                "text": r["utt"].strip(),
+                "intent": r["intent"],
+                "scenario": r["scenario"],
+                "agree": sum(j["intent_score"] == 1 for j in r["judgments"]),
+                "worker_id": r["worker_id"],
+                "orig_partition": r["partition"],
+            })
 
-    spider = sum((load(sp_dir / f) for f in ("train_spider.json", "train_others.json", "dev.json")), [])
-    tables = {t["db_id"]: t for t in load(sp_dir / "tables.json")}
+    s = p["split"]
+    splits = split_groups(rows, s["golden"], s["val_of_rest"], s["seed"])
 
-    sp_by_db = defaultdict(list)
-    for e in spider:
-        sp_by_db[e["db_id"]].append(e)
-    vi_by_db = defaultdict(list)
-    for vi_split, split in VI_TO_SPLIT.items():
-        for e in load(vi_dir / f"{vi_split}.json"):
-            vi_by_db[e["db_id"]].append((split, e))
-
-    assert set(sp_by_db) == set(vi_by_db), "danh sách database không khớp"
-    pairs, struct_ok = [], 0
-    for db_id, vi_rows in vi_by_db.items():
-        sp_rows = sp_by_db[db_id]
-        assert len(sp_rows) == len(vi_rows), f"{db_id}: số câu không khớp"
-        assert len({s for s, _ in vi_rows}) == 1, f"{db_id}: database nằm ở nhiều split"
-        for sp, (split, v) in zip(sp_rows, vi_rows):
-            struct_ok += same_structure(sp["sql"], v["sql"])
-            pairs.append((split, sp, v))
-
-    schemas = {db: build_schema(tables[db], str(db_path(db)), p["sample_rows"]) for db in sp_by_db}
-
-    out = {"train": [], "val": [], "golden": []}
     dropped = Counter()
-    for i, (split, sp, v) in enumerate(pairs):
-        db_id = sp["db_id"]
-        sql = normalize_sql(sp["query"])
-        ok, res = execute(str(db_path(db_id)), sql)
-        if not ok:  # vài câu SQL vàng của Spider tự lỗi
-            dropped[split] += 1
-            print(f"  [bỏ] {split} {db_id}: {sql[:80]} -> {res}")
-            continue
-        base = {"db_id": db_id, "schema": schemas[db_id], "sql": sql, "hardness": hardness(sp["sql"])}
-        out[split].append({"id": f"{split}-{i}", "lang": "vi", "question": " ".join(v["question"].split()), **base})
-        if split == "train" and p["add_english_to_train"]:
-            out[split].append({"id": f"{split}-{i}-en", "lang": "en", "question": sp["question"].strip(), **base})
+    if p["min_agree_train"] > 0:  # tuỳ chọn: bỏ câu train mà người chấm không xác nhận intent
+        keep = [r for r in splits["train"] if r["agree"] >= p["min_agree_train"]]
+        dropped["train_low_agree"] = len(splits["train"]) - len(keep)
+        splits["train"] = keep
 
-    rng = random.Random(p["seed"])
-    rng.shuffle(out["train"])
-    vi_train = [r for r in out["train"] if r["lang"] == "vi"]
-    probe = sorted(rng.sample(vi_train, p["train_probe_size"]), key=lambda r: r["id"])
+    train_texts = {norm_text(r["text"]) for r in splits["train"]}
+    for split in ("val", "golden"):
+        for r in splits[split]:
+            r["seen_in_train"] = norm_text(r["text"]) in train_texts
 
-    write_jsonl(SPLIT_FILES["train"], out["train"])
+    probe = random.Random(p["seed"]).sample(splits["train"], p["train_probe_size"])
+
+    write_jsonl(SPLIT_FILES["train"], splits["train"])
     write_jsonl(SPLIT_FILES["train_probe"], probe)
-    write_jsonl(SPLIT_FILES["val"], out["val"])
-    write_jsonl(GOLDEN_FILE, out["golden"])
+    write_jsonl(SPLIT_FILES["val"], splits["val"])
+    write_jsonl(GOLDEN_FILE, splits["golden"])
 
-    stats = {"aligned_pairs": len(pairs), "struct_exact_ratio": round(struct_ok / len(pairs), 4)}
-    for split, rows in {**out, "train_probe": probe}.items():
-        hard = Counter(r["hardness"] for r in rows if r["lang"] == "vi")
+    total = sum(len(v) for v in splits.values())
+    stats = {"total": total, "dropped": dict(dropped)}
+    for split, rs in splits.items():
+        c = Counter(r["intent"] for r in rs)
         stats[split] = {
-            "rows": len(rows),
-            "vi_rows": sum(r["lang"] == "vi" for r in rows),
-            "databases": len({r["db_id"] for r in rows}),
-            "dropped_bad_gold": dropped.get(split, 0),
-            **{f"hard_{k}": hard[k] for k in ("easy", "medium", "hard", "extra")},
+            "rows": len(rs),
+            "frac_of_total": round(len(rs) / total, 4),
+            "intents": len(c),
+            "scenarios": len({r["scenario"] for r in rs}),
+            "majority_intent_frac": round(max(c.values()) / len(rs), 4),
+            "min_intent_count": min(c.values()),
+            "agree3_frac": round(sum(r["agree"] == 3 for r in rs) / len(rs), 4),
         }
+        if split != "train":
+            stats[split]["seen_in_train_frac"] = round(sum(r["seen_in_train"] for r in rs) / len(rs), 4)
+    stats["val_frac_of_train_plus_val"] = round(len(splits["val"]) / (len(splits["val"]) + len(splits["train"])), 4)
+    stats["train_probe"] = {"rows": len(probe)}
     write_json(REPORTS / "data_stats.json", stats)
-    print(json.dumps(stats, ensure_ascii=False, indent=1))
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

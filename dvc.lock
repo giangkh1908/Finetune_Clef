@@ -5,116 +5,120 @@ stages:
     deps:
     - path: src/fetch.py
       hash: md5
-      md5: 277d1f2faf8777709d5c97a8219eb4a4
-      size: 1771
+      md5: 64a3f17960f8b89ecf8fb31d292141e9
+      size: 1727
     params:
       params.yaml:
         fetch:
-          vitext2sql_repo: https://github.com/VinAIResearch/ViText2SQL.git
-          vitext2sql_commit: e759141d891feb794bb9a9fb912d544b25583b3c
-          spider_gdrive_id: 1403EGqzIDoHMdQF4c9Bkyl7dZLZ5Wt6J
+          massive_url: 
+            https://amazon-massive-nlu-dataset.s3.amazonaws.com/amazon-massive-dataset-1.1.tar.gz
+          massive_sha256: 
+            4cba5faa11c71437928e17cb1b9b3d8b8e727e7ea363a3a9a8045e19c0491577
+          locale: vi-VN
     outs:
     - path: raw/SOURCES.json
       hash: md5
-      md5: 01ad85fcbd71c0cf31032ef67cf6799a
-      size: 204
-    - path: raw/ViText2SQL
+      md5: 41e34f113065904f3c154a190dedd8f1
+      size: 248
+    - path: raw/massive
       hash: md5
-      md5: 00b5003648467c6ff95913b07061d0a0.dir
-      size: 80542601
-      nfiles: 11
-    - path: raw/spider
-      hash: md5
-      md5: a3e8b7d10b62891d6e2d8c9372ee1f75.dir
-      size: 917377540
-      nfiles: 396
+      md5: d12e8146b1f8f7f3b93304e37c7255cb.dir
+      size: 12486674
+      nfiles: 4
   prepare:
     cmd: python -m src.prepare
     deps:
-    - path: raw/ViText2SQL
+    - path: raw/massive
       hash: md5
-      md5: 00b5003648467c6ff95913b07061d0a0.dir
-      size: 80542601
-      nfiles: 11
-    - path: raw/spider
-      hash: md5
-      md5: a3e8b7d10b62891d6e2d8c9372ee1f75.dir
-      size: 917377540
-      nfiles: 396
+      md5: d12e8146b1f8f7f3b93304e37c7255cb.dir
+      size: 12486674
+      nfiles: 4
     - path: src/common.py
       hash: md5
-      md5: f659666e6911a4d9a292a5516f60255f
-      size: 2860
+      md5: 706e251c4cd4acd6d619782b2e8acea7
+      size: 2973
     - path: src/prepare.py
       hash: md5
-      md5: 0622047bcb6d249afee0da6bd81a46e5
-      size: 4645
-    - path: src/sql_utils.py
-      hash: md5
-      md5: 1a721f457e41620c92da8493ad0ebe03
-      size: 6950
+      md5: 5d40ae01d6a57d10823e030c7ee32e67
+      size: 5194
     params:
       params.yaml:
+        fetch.locale: vi-VN
         prepare:
-          level: syllable-level
-          sample_rows: 3
-          add_english_to_train: true
+          split:
+            golden: 0.15
+            val_of_rest: 0.18
+            seed: 42
+          min_agree_train: 0
           train_probe_size: 300
           seed: 42
     outs:
     - path: data/golden/golden.jsonl
       hash: md5
-      md5: d45ad2d2aa4a09fbfa763d74749c6008
-      size: 6218453
+      md5: ef1172efb916f0f8ea60d5b6ee342c5a
+      size: 530323
     - path: data/train.jsonl
       hash: md5
-      md5: 2230868bb4fd46f0fe22e8d0fc6fdba5
-      size: 38569964
+      md5: 28b11301cfe11246b2a0c7aa7b323b90
+      size: 2195089
     - path: data/train_probe.jsonl
       hash: md5
-      md5: c8278c47bcb3bb20abb3de83e45558f5
-      size: 865323
+      md5: 7f1404c3ef8887b35f66c5ee54c2454a
+      size: 57398
     - path: data/val.jsonl
       hash: md5
-      md5: eab574a0cd99b34b2c9a300b17c2ad02
-      size: 2271279
+      md5: 5ae02fc5b611cdfd2402c64b41009d7f
+      size: 544837
     - path: reports/data_stats.json
       hash: md5
-      md5: b23556138f88e8eb631442a7cb1a33af
-      size: 885
+      md5: a95ca5abf5e0396c274ff02d998bcef4
+      size: 795
   check_data:
     cmd: python -m src.check_data
     deps:
     - path: data/golden/golden.jsonl
       hash: md5
-      md5: d45ad2d2aa4a09fbfa763d74749c6008
-      size: 6218453
+      md5: ef1172efb916f0f8ea60d5b6ee342c5a
+      size: 530323
     - path: data/train.jsonl
       hash: md5
-      md5: 2230868bb4fd46f0fe22e8d0fc6fdba5
-      size: 38569964
+      md5: 28b11301cfe11246b2a0c7aa7b323b90
+      size: 2195089
     - path: data/train_probe.jsonl
       hash: md5
-      md5: c8278c47bcb3bb20abb3de83e45558f5
-      size: 865323
+      md5: 7f1404c3ef8887b35f66c5ee54c2454a
+      size: 57398
     - path: data/val.jsonl
       hash: md5
-      md5: eab574a0cd99b34b2c9a300b17c2ad02
-      size: 2271279
+      md5: 5ae02fc5b611cdfd2402c64b41009d7f
+      size: 544837
+    - path: schema/massive_intent.yaml
+      hash: md5
+      md5: 124f60bd49d8c79e31a0e3302061db30
+      size: 4811
     - path: src/check_data.py
       hash: md5
-      md5: 9191461b9f4257241d0fd278a30504d5
-      size: 3499
-    - path: src/evaluate.py
+      md5: 83e8b7a0d05e467055f822ff83d352cd
+      size: 5662
+    - path: src/metrics.py
       hash: md5
-      md5: 57a1612ea860be50f454789a94994f57
-      size: 3747
-    - path: src/sql_utils.py
+      md5: e9714c79573e2b3c7bd1a6965023ac5b
+      size: 4547
+    - path: src/records.py
       hash: md5
-      md5: 1a721f457e41620c92da8493ad0ebe03
-      size: 6950
+      md5: 13ab985ebe79011e67c288ed621ad94a
+      size: 1433
+    params:
+      params.yaml:
+        check:
+          max_text_overlap: 0.0
+          min_train_per_intent: 3
+        prepare.split:
+          golden: 0.15
+          val_of_rest: 0.18
+          seed: 42
     outs:
     - path: reports/checks.json
       hash: md5
-      md5: 1711d7be1f743ee975720e842a009d25
-      size: 895
+      md5: e0a3c35862a7aba6a3d238eebe9445e6
+      size: 1765

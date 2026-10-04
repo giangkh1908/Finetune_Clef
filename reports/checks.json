@@ -1,39 +1,83 @@
 {
-  "db_disjoint_train_val": {
+  "ids_disjoint": {
     "pass": true,
-    "detail": "[]"
-  },
-  "db_disjoint_train_golden": {
-    "pass": true,
-    "detail": "[]"
-  },
-  "db_disjoint_val_golden": {
-    "pass": true,
-    "detail": "[]"
-  },
-  "question_overlap_val_low": {
-    "pass": true,
-    "detail": "3/952"
-  },
-  "question_overlap_golden_low": {
-    "pass": true,
-    "detail": "9/1907"
+    "detail": ""
   },
   "train_probe_subset_of_train": {
     "pass": true,
     "detail": "300 mẫu"
   },
-  "no_empty_fields": {
+  "text_overlap_val_low": {
+    "pass": true,
+    "detail": "0/2539 (ngưỡng 0%)"
+  },
+  "seen_in_train_flag_val": {
+    "pass": true,
+    "detail": ""
+  },
+  "text_overlap_golden_low": {
+    "pass": true,
+    "detail": "0/2478 (ngưỡng 0%)"
+  },
+  "seen_in_train_flag_golden": {
+    "pass": true,
+    "detail": ""
+  },
+  "split_ratio": {
+    "pass": true,
+    "detail": "golden=0.1500 val/(train+val)=0.1808"
+  },
+  "all_intents_in_val": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "all_intents_in_golden": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "labels_in_schema": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "schema_has_no_unused_intent": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "scenario_is_intent_prefix": {
+    "pass": true,
+    "detail": ""
+  },
+  "no_empty_text": {
+    "pass": true,
+    "detail": ""
+  },
+  "min_train_per_intent": {
+    "pass": true,
+    "detail": "ít nhất: ('cooking_query', 4)"
+  },
+  "clef_records_valid": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "option_order_sorted": {
+    "pass": true,
+    "detail": ""
+  },
+  "label_index_roundtrip": {
     "pass": true,
     "detail": ""
   },
   "scorer_gold_as_pred_is_100": {
     "pass": true,
-    "detail": "EX=1.0000"
+    "detail": "acc=1.0000"
   },
-  "scorer_rejects_wrong_results": {
+  "scorer_rejects_wrong": {
     "pass": true,
-    "detail": "0 false positive"
+    "detail": "acc=0.0000"
+  },
+  "nll_uniform_is_log_k": {
+    "pass": true,
+    "detail": "nll=4.0943"
   },
   "threshold_logic": {
     "pass": true,

@@ -13,7 +13,7 @@ RAW = ROOT / "raw"
 DATA = ROOT / "data"
 REPORTS = ROOT / "reports"
 OUTPUTS = ROOT / "outputs"
-DB_DIR = RAW / "spider" / "database"
+SCHEMA_DIR = ROOT / "schema"
 
 # golden nằm riêng thư mục; chỉ golden_eval.py được phép đọc.
 SPLIT_FILES = {
@@ -70,11 +70,13 @@ def git_sha() -> str:
 
 
 def lineage_tags() -> dict:
-    """Gắn vào mọi MLflow run: biết chính xác run được train/chấm trên byte dữ liệu nào, code version nào."""
+    """Gắn vào mọi MLflow run: biết chính xác run được train/chấm trên byte dữ liệu nào, schema nào, code version nào."""
     tags = {"git_sha": git_sha()}
     for name, path in {**SPLIT_FILES, "golden": GOLDEN_FILE}.items():
         if Path(path).exists():
             tags[f"data.{name}.md5"] = file_md5(path)
+    for path in sorted(SCHEMA_DIR.glob("*.yaml")):
+        tags[f"schema.{path.stem}.md5"] = file_md5(path)
     lock = ROOT / "dvc.lock"
     if lock.exists():
         tags["dvc_lock.md5"] = file_md5(lock)

@@ -1,0 +1,9 @@
+# Augmentation lúc train (clef-finetune): thay instructions bằng một biến thể, để model học "quyết định" chứ không học
+# thuộc câu chữ của prompt. {instructions} = câu gốc trong massive_intent.yaml. Chỉ dùng cho train, không dùng khi chấm.
+paraphrases:
+  intent:
+    - "{instructions}"
+    - "Classify the intent of this Vietnamese voice-assistant request."
+    - "What does the user want the assistant to do? Pick the matching intent."
+    - "Người dùng nói câu này với trợ lý ảo. Câu đó thuộc ý định (intent) nào?"
+    - "Xác định intent của yêu cầu tiếng Việt gửi tới trợ lý giọng nói."

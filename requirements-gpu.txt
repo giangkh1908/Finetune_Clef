@@ -1,0 +1,19 @@
+# GPU (Linux): sanity / bakeoff / train / eval / register / golden / serving.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements-gpu.txt
+-r requirements.txt
+torch>=2.11
+torchvision
+transformers>=5.10.2          # Qwen3_5ForConditionalGeneration (backbone của Clef)
+peft>=0.17
+accelerate
+safetensors
+huggingface_hub
+pillow
+# Fine-tune Clef: LoRA + joint schema head. Pin commit (repo còn alpha, chưa có kết quả GPU công bố).
+clef-finetune @ git+https://github.com/MersivMedia/clef-finetune@c83f7bc1acc23c81ad0de838510c59c48bf60c79
+# Bakeoff: Laya (laya-vi, laya-multilingual)
+laya==0.3.26
+# Kernel nhanh cho lớp Gated DeltaNet của Qwen3.5 (không có thì fallback PyTorch, chậm hơn nhiều)
+flash-linear-attention
+causal-conv1d

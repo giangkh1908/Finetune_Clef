@@ -1,0 +1,71 @@
+# Schema câu hỏi gửi cho Clef (System One request). Đây chính là "rubric gán nhãn": model đọc đúng các mô tả này.
+# Đổi chữ ở đây = đổi thứ model nhìn thấy -> DVC chạy lại từ sanity (stage nào dùng schema đều khai báo deps).
+# Option id = tên intent gốc của MASSIVE (không đổi, để so được với các kết quả công bố).
+# Lưu ý: encoder của Cloudflare SẮP XẾP option id theo alphabet, nên thứ tự dưới đây không ảnh hưởng.
+
+question_id: intent
+instructions: >-
+  The state is one request that a Vietnamese user said to a voice assistant (written in Vietnamese).
+  Which intent does the request express?
+
+intents:
+  alarm_query: Ask about alarms that are already set (which alarms, what time).
+  alarm_remove: Cancel, delete or turn off an alarm.
+  alarm_set: Set a new alarm or wake-up call.
+  audio_volume_down: Make the device quieter / lower the volume.
+  audio_volume_mute: Mute the device, silence it or tell the assistant to be quiet.
+  audio_volume_other: Other volume requests, e.g. set the volume to a specific level or ask about the volume.
+  audio_volume_up: Make the device louder / raise the volume.
+  calendar_query: Ask about calendar events, meetings, appointments, reminders or the schedule.
+  calendar_remove: Delete or cancel calendar events, meetings or reminders, or clear the schedule.
+  calendar_set: Create a calendar event, meeting, appointment or reminder.
+  cooking_query: A cooking question that is not a request for a recipe (cooking times, techniques, kitchen tips).
+  cooking_recipe: Ask for a recipe or how to cook or prepare a dish.
+  datetime_convert: Convert a time between time zones or formats.
+  datetime_query: Ask for the current time, date or day, or the time in a place.
+  email_addcontact: Add a person or an email address to the contacts.
+  email_query: Check, read or search emails (new emails, emails from someone).
+  email_querycontact: Ask for a contact's details (phone number, email address, birthday, etc.).
+  email_sendemail: Send, write or reply to an email.
+  general_greet: A greeting or asking how the assistant is.
+  general_joke: Ask the assistant to tell a joke or say something funny.
+  general_quirky: Chit-chat, opinions, odd or off-topic requests that fit no other intent.
+  iot_cleaning: Start or control the robot vacuum / cleaning device.
+  iot_coffee: Make coffee with the coffee machine.
+  iot_hue_lightchange: Change the colour or scene of the lights.
+  iot_hue_lightdim: Dim the lights / lower the brightness.
+  iot_hue_lightoff: Turn the lights off.
+  iot_hue_lighton: Turn the lights on.
+  iot_hue_lightup: Make the lights brighter.
+  iot_wemo_off: Turn off a smart plug / smart socket.
+  iot_wemo_on: Turn on a smart plug / smart socket.
+  lists_createoradd: Create a list or add an item to a list (shopping list, to-do list).
+  lists_query: Ask what is on a list or which lists exist.
+  lists_remove: Remove an item from a list or delete a list.
+  music_dislikeness: Say that the user dislikes a song, artist or kind of music.
+  music_likeness: Say that the user likes a song, artist or genre, or save it as a favourite.
+  music_query: Ask about the music that is playing (song title, artist, album).
+  music_settings: Change playback settings such as shuffle or repeat.
+  news_query: Ask for news or headlines.
+  play_audiobook: Play or resume an audiobook.
+  play_game: Start or play a game.
+  play_music: Play music, a song, an artist, an album or a playlist.
+  play_podcasts: Play a podcast or a podcast episode.
+  play_radio: Play a radio station.
+  qa_currency: Ask about exchange rates or convert between currencies.
+  qa_definition: Ask for the definition or meaning of a word or term.
+  qa_factoid: Ask a factual question about the world (people, places, facts, numbers).
+  qa_maths: Ask to compute a maths expression or solve a calculation.
+  qa_stock: Ask about stock prices or the stock market.
+  recommendation_events: Ask for recommended events or activities to attend.
+  recommendation_locations: Ask for recommended places such as restaurants, shops or venues.
+  recommendation_movies: Ask for movie recommendations.
+  social_post: Post or send something on social media, including complaints to a company.
+  social_query: Ask about updates on social media (friends' posts, notifications).
+  takeaway_order: Order food for delivery or takeaway.
+  takeaway_query: Ask about takeaway or delivery (order status, whether a place delivers).
+  transport_query: Ask about transport schedules, routes, trains, flights or buses.
+  transport_taxi: Book or call a taxi or ride.
+  transport_ticket: Book or buy a ticket for a train, flight or bus.
+  transport_traffic: Ask about traffic conditions.
+  weather_query: Ask about the weather.

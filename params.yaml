@@ -1,80 +1,102 @@
 # Mọi tham số của pipeline nằm ở đây. DVC theo dõi file này: đổi tham số nào thì chỉ các stage phụ thuộc chạy lại.
+# Mọi nguồn bên ngoài đều PIN version: dữ liệu (sha256), model (HF commit), clef-finetune (git commit trong requirements).
 
 project:
   mlflow_tracking_uri: sqlite:///mlflow.db   # có thể ghi đè bằng biến môi trường MLFLOW_TRACKING_URI
-  registered_model: text2sql-vi
+  registered_model: clef-intent-vi
 
-# Mỗi vòng lặp (đổi dữ liệu / hyperparam / model) = 1 milestone mới. Golden chấm đúng 1 lần ở cuối mỗi milestone.
+# Mỗi vòng lặp (đổi dữ liệu / schema / hyperparam / model) = 1 milestone mới. Golden chấm đúng 1 lần ở cuối mỗi milestone.
 milestone:
   id: M1
-  note: "baseline: ViText2SQL + Spider EN, full FT"
+  note: "baseline: MASSIVE vi-VN, Clef-flash LoRA + head"
 
 fetch:
-  vitext2sql_repo: https://github.com/VinAIResearch/ViText2SQL.git
-  vitext2sql_commit: e759141d891feb794bb9a9fb912d544b25583b3c
-  spider_gdrive_id: 1403EGqzIDoHMdQF4c9Bkyl7dZLZ5Wt6J
+  massive_url: https://amazon-massive-nlu-dataset.s3.amazonaws.com/amazon-massive-dataset-1.1.tar.gz
+  massive_sha256: 4cba5faa11c71437928e17cb1b9b3d8b8e727e7ea363a3a9a8045e19c0491577
+  locale: vi-VN
 
 prepare:
-  level: syllable-level        # syllable-level = tiếng Việt tự nhiên (không tách từ bằng dấu _)
-  sample_rows: 3               # số dòng dữ liệu mẫu mỗi bảng đưa vào schema
-  add_english_to_train: true   # thêm câu hỏi tiếng Anh gốc của Spider (cùng DB train) vào train
-  train_probe_size: 300        # tập con train cố định để đo train-EX khi chẩn đoán overfit
+  # Gộp cả 16 521 câu rồi chia lại: golden 15% tổng; 85% còn lại -> train 82% / val 18%.
+  # Phân tầng theo intent, câu trùng chữ luôn cùng một tập (không rò rỉ).
+  split: {golden: 0.15, val_of_rest: 0.18, seed: 42}
+  min_agree_train: 0           # >0: bỏ câu train có ít hơn N/3 người chấm xác nhận intent (0 = giữ hết)
+  train_probe_size: 300        # tập con train cố định để đo train-acc khi chẩn đoán overfit
   seed: 42
 
-generation:
-  backend: hf                  # hf | vllm
-  batch_size: 16
-  max_new_tokens: 300
+check:
+  max_text_overlap: 0.0        # val/golden không được chứa câu y hệt train
+  min_train_per_intent: 3      # cooking_query chỉ có 6 câu trong toàn bộ MASSIVE vi-VN (4 ở train): biết trước sẽ yếu
 
-# ---- Sanity overfit (rẻ, chạy trước khi tốn GPU cho train thật). Dùng train.base_model.
+# Chấm điểm (dùng chung cho sanity / bakeoff / eval_val / serving)
+eval:
+  dtype: bfloat16
+  batch_size: 16
+  max_length: 4096             # prompt + schema 60 intent + câu; sanity kiểm tra vừa
+  laya_batch_size: 32
+  laya_head_max_len: 4096       # mặc định của Laya gộp lựa chọn ở 100% câu khi có 60 intent (đã đo)
+
+# ---- Sanity (rẻ, chạy trước khi tốn GPU cho train thật). Dùng train.base_model.
 sanity:
   n_examples: 50
-  epochs: 30
-  lr: 1.0e-4
-  batch_size: 8
-  pass_ex: 0.98                # EX trên chính 50 mẫu đã học phải >= mức này, nếu không là bug pipeline
-  max_final_loss: 0.05
+  epochs: 10
+  grad_accum: 2
+  lr: 3.0e-4
+  pass_acc: 0.98               # acc trên chính 50 câu đã học phải >= mức này, nếu không là bug pipeline
+  max_final_loss: 0.1
+  batch_check_n: 16
+  max_batch_prob_diff: 0.02    # bf16: batch và từng câu được lệch chút ít, không được đổi đáp án
 
 # ---- Bakeoff: NGOÀI vòng lặp. Chạy 1 lần lúc đầu (hoặc khi muốn xét lại model):
 #        dvc repro bakeoff/dvc.yaml
 #      Đọc reports/bakeoff.md rồi ghi quyết định vào train.base_model. Chỉ dùng train + val, không đụng golden.
 bakeoff:
-  # Chạy lần lượt, 1 GPU. Chỉ model <= ~1B: full FT vừa RTX 4090 24GB và inference vừa GPU 4GB.
-  # Muốn thử 1.5B-2B: thêm vào kèm `method: lora`, hoặc thuê A100 80GB để full FT.
   candidates:
-    - {name: qwen3.5-0.8b, hf_id: Qwen/Qwen3.5-0.8B}
-    - {name: qwen3-0.6b, hf_id: Qwen/Qwen3-0.6B}
-    - {name: qwen2.5-coder-0.5b, hf_id: Qwen/Qwen2.5-Coder-0.5B-Instruct}
-  train_subset: 3000           # fine-tune ngắn, cùng ngân sách cho mọi ứng viên
+    - {name: clef-flash, kind: clef, hf_id: Cloudflare/clef-flash, revision: 17f0b0ad64efb65d273590632833508766b2aae6}
+    # Clef 27B: chỉ zero-shot (fine-tune cần H200). Bỏ comment nếu GPU >= 80GB và muốn biết trần của họ Clef.
+    # - {name: clef-27b, kind: clef, hf_id: Cloudflare/clef, revision: 2f3de3dd85f379784083b0814d997ab627200f0c, finetune: false}
+    - {name: laya-vi, kind: laya, hf_id: vanty120/laya-vi, revision: 860b2b5f145a1013161dcedd93fda7c263a3c9f0}
+    - {name: laya-multilingual, kind: laya, hf_id: convaiinnovations/laya-multilingual, revision: 1720e3e3357cfe1e281542e223f8273b0890ca34}
+  ft_sizes: [500, 2000]        # fine-tune ngắn với N câu -> đường "gán nhãn thêm thì được bao nhiêu"
   epochs: 1
-  lr: 2.0e-5
+  lr: 1.0e-4
   latency_probe: 50            # số câu đo latency batch=1
-  max_params_b: 1.0            # ràng buộc triển khai: chạy được trên GPU 4GB (bf16)
-  prefer_smaller_within: 0.02  # model nhỏ hơn được chọn nếu val-EX kém model tốt nhất <= 2 điểm
+  max_params_b: 10.0           # ràng buộc triển khai (Clef-flash ~9B)
+  prefer_smaller_within: 0.02  # model nhỏ hơn được chọn nếu val-acc kém model tốt nhất <= 2 điểm
 
-# ---- Vòng lặp: train thật = grid hyperparam x nhiều seed (để đo độ ổn định)
+# ---- Vòng lặp: train thật = grid lr x nhiều seed (để đo độ ổn định). clef-finetune: LoRA + joint schema head.
 train:
-  base_model: Qwen/Qwen3.5-0.8B   # quyết định từ bakeoff (sửa tay sau khi đọc reports/bakeoff.md)
-  method: full                 # full | lora
-  epochs: 3
-  max_length: 4096
-  batch_size: 8
-  grad_accum: 4
+  base_model: Cloudflare/clef-flash                       # quyết định từ bakeoff (sửa tay sau khi đọc reports/bakeoff.md)
+  base_revision: 17f0b0ad64efb65d273590632833508766b2aae6
+  dtype: bfloat16
+  epochs: 2                    # checkpoint mỗi epoch
+  grad_accum: 16               # clef-finetune train batch 1 x grad_accum câu mỗi optimizer step
   warmup_ratio: 0.03
-  weight_decay: 0.01
-  lora: {r: 16, alpha: 32, dropout: 0.05}
+  weight_decay: 0.0
+  head_lr_ratio: 0.5           # lr của joint head = lr x tỷ lệ này
+  train_head: true
+  label_smoothing: 0.05        # công thức của Cloudflare: CE làm mượt + Brier (calibration)
+  brier_weight: 1.0
+  gradient_checkpointing: true
+  lora: {r: 64, alpha: 128, dropout: 0.05}
+  augment:                     # schema augmentation của clef-finetune (chỉ lúc train)
+    shuffle_questions: false   # chỉ có 1 câu hỏi
+    question_subset_prob: 0.0
+    paraphrase_prob: 0.3       # schema/paraphrases.yaml
+    rename_option_prob: 0.1    # đổi tên option id (alarm_set -> ALARM_SET...), nhãn được map theo
+    criteria_dropout_prob: 0.1 # bỏ mô tả của vài intent để model không dựa hẳn vào mô tả
   grid:
-    lr: [1.0e-5, 3.0e-5]
-  seeds: [42, 1234]
+    lr: [5.0e-5, 1.0e-4]
+  seeds: [0, 1]
 
-# ---- Bước 4: chọn trên val
+# ---- Chọn trên val
 select:
-  stability_k: 1.0             # điểm ổn định = mean(val-EX qua các seed) - k * std
-  underfit_train_ex: 0.60      # train-EX dưới mức này -> underfit
-  overfit_gap: 0.20            # train-EX - val-EX vượt mức này -> overfit
-  target_precision: 0.90       # ngưỡng tin cậy: coverage lớn nhất mà precision trên val >= mức này
+  stability_k: 1.0             # điểm ổn định = mean(val-acc qua các seed) - k * std
+  underfit_train_acc: 0.80     # train-acc dưới mức này -> underfit
+  overfit_gap: 0.10            # train-acc - val-acc vượt mức này -> overfit
+  max_val_ece: 0.05            # ECE trên val vượt mức này -> miscalibrated
+  target_precision: 0.95       # ngưỡng: coverage tự động lớn nhất mà precision trên val >= mức này
 
-# ---- Bước 5: golden (chấm 1 lần mỗi milestone)
+# ---- Golden (chấm 1 lần mỗi milestone)
 golden:
-  max_ex_drop_vs_val: 0.05     # golden-EX thấp hơn val-EX quá mức này -> nghi chọn quá khớp val / lệch phân phối
-  max_precision_drop: 0.05     # precision@ngưỡng trên golden thấp hơn target quá mức này -> ngưỡng không chuyển giao
+  max_acc_drop_vs_val: 0.03    # golden-acc thấp hơn val-acc quá mức này -> nghi chọn quá khớp val / lệch phân phối
+  max_precision_drop: 0.03     # precision@ngưỡng trên golden thấp hơn target quá mức này -> ngưỡng không chuyển giao

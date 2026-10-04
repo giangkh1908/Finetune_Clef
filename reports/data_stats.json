@@ -1,44 +1,37 @@
 {
-  "aligned_pairs": 9693,
-  "struct_exact_ratio": 0.8459,
+  "total": 16521,
+  "dropped": {},
   "train": {
-    "rows": 13662,
-    "vi_rows": 6831,
-    "databases": 99,
-    "dropped_bad_gold": 0,
-    "hard_easy": 1557,
-    "hard_medium": 2261,
-    "hard_hard": 1502,
-    "hard_extra": 1511
+    "rows": 11504,
+    "frac_of_total": 0.6963,
+    "intents": 60,
+    "scenarios": 18,
+    "majority_intent_frac": 0.0697,
+    "min_intent_count": 4,
+    "agree3_frac": 0.9075
   },
   "val": {
-    "rows": 952,
-    "vi_rows": 952,
-    "databases": 25,
-    "dropped_bad_gold": 2,
-    "hard_easy": 249,
-    "hard_medium": 405,
-    "hard_hard": 191,
-    "hard_extra": 107
+    "rows": 2539,
+    "frac_of_total": 0.1537,
+    "intents": 60,
+    "scenarios": 18,
+    "majority_intent_frac": 0.0689,
+    "min_intent_count": 1,
+    "agree3_frac": 0.9122,
+    "seen_in_train_frac": 0.0
   },
   "golden": {
-    "rows": 1907,
-    "vi_rows": 1907,
-    "databases": 42,
-    "dropped_bad_gold": 1,
-    "hard_easy": 425,
-    "hard_medium": 779,
-    "hard_hard": 402,
-    "hard_extra": 301
+    "rows": 2478,
+    "frac_of_total": 0.15,
+    "intents": 60,
+    "scenarios": 18,
+    "majority_intent_frac": 0.0698,
+    "min_intent_count": 1,
+    "agree3_frac": 0.9072,
+    "seen_in_train_frac": 0.0
   },
+  "val_frac_of_train_plus_val": 0.1808,
   "train_probe": {
-    "rows": 300,
-    "vi_rows": 300,
-    "databases": 84,
-    "dropped_bad_gold": 0,
-    "hard_easy": 66,
-    "hard_medium": 101,
-    "hard_hard": 63,
-    "hard_extra": 70
+    "rows": 300
   }
 }
