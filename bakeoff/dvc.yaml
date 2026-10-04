@@ -1,0 +1,23 @@
+# Bakeoff: chọn base model. NGOÀI vòng lặp milestone, chỉ chạy khi chủ động gọi:
+#   dvc repro bakeoff/dvc.yaml
+# Đọc reports/bakeoff.md rồi tự ghi quyết định vào params.yaml: train.base_model.
+# Không có stage nào trong vòng lặp phụ thuộc vào đây, nên sửa code/dữ liệu không kéo bakeoff chạy lại.
+
+stages:
+  bakeoff:
+    wdir: ..
+    cmd: python -m src.bakeoff
+    deps:
+      - src/bakeoff.py
+      - data/train.jsonl
+      - data/val.jsonl
+      - reports/sanity.json   # chỉ so model khi pipeline đã qua sanity
+    params:
+      - bakeoff
+    outs:
+      - reports/bakeoff.json:
+          cache: false
+      - reports/bakeoff.md:
+          cache: false
+      - reports/bakeoff_choice.json:
+          cache: false

@@ -1,4 +1,4 @@
-"""Stage `bakeoff`: so các base model ứng viên với CÙNG ngân sách, chỉ dùng train + val.
+"""Bakeoff (NGOÀI vòng lặp, chạy bằng `dvc repro bakeoff/dvc.yaml`): so các base model ứng viên với CÙNG ngân sách, chỉ dùng train + val.
 
 Mỗi ứng viên: (1) zero-shot trên val, (2) fine-tune ngắn trên một tập con train cố định rồi chấm val,
 (3) đo latency batch=1 và số tham số. Chọn theo val-EX sau fine-tune trong ràng buộc triển khai;
@@ -103,7 +103,7 @@ def main():
     write_json(REPORTS / "bakeoff_choice.json", {"name": chosen["name"], "hf_id": chosen["hf_id"],
                                                  "method": chosen["method"], "ft_val_ex": chosen["ft_val_ex"]})
     print(md)
-    print("Chọn:", chosen["name"])
+    print(f"Đề xuất: {chosen['name']} -> nếu đồng ý, ghi `train.base_model: {chosen['hf_id']}` vào params.yaml")
 
 
 if __name__ == "__main__":

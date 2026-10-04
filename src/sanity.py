@@ -17,15 +17,16 @@ from src.sft import build_trainer, check_label_masking, load_base
 def main():
     P = params()
     p, g = P["sanity"], P["generation"]
+    base = P["train"]["base_model"]
     vi_train = [r for r in load_split("train") if r["lang"] == "vi"]
     rows = random.Random(0).sample(vi_train, p["n_examples"])
 
     mlflow = setup_mlflow("text2sql-sanity")
-    with mlflow.start_run(run_name=f"overfit{p['n_examples']}-{p['model'].split('/')[-1]}"):
-        mlflow.set_tags({**lineage_tags(), "stage": "sanity", "base_model": p["model"]})
+    with mlflow.start_run(run_name=f"overfit{p['n_examples']}-{base.split('/')[-1]}"):
+        mlflow.set_tags({**lineage_tags(), "stage": "sanity", "base_model": base})
         mlflow.log_params({f"sanity.{k}": v for k, v in p.items()})
 
-        model, tok = load_base(p["model"])
+        model, tok = load_base(base)
         hp = {"epochs": p["epochs"], "lr": p["lr"], "batch_size": p["batch_size"], "grad_accum": 1,
               "max_length": P["train"]["max_length"], "warmup_ratio": 0.0, "weight_decay": 0.0,
               "scheduler": "constant", "seed": 0, "save": False, "gradient_checkpointing": False,

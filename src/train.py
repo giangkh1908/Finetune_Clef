@@ -17,8 +17,7 @@ def run_name(lr, seed):
 def main():
     P = params()
     t = P["train"]
-    choice = json.loads((REPORTS / "bakeoff_choice.json").read_text(encoding="utf-8"))
-    base, method = choice["hf_id"], t["method"]
+    base, method = t["base_model"], t["method"]  # quyết định từ bakeoff, ghi trong params.yaml
     train, val = load_split("train"), load_split("val")
 
     mlflow = setup_mlflow("text2sql-train")

@@ -1,11 +1,12 @@
 # Một vòng lặp = một milestone:
-#   fetch -> prepare -> check_data -> sanity -> bakeoff -> train -> eval_val -> select -> register -> golden
+#   fetch -> prepare -> check_data -> sanity -> train -> eval_val -> select -> register -> golden
+# Bakeoff (chọn base model) NGOÀI vòng lặp: `dvc repro bakeoff/dvc.yaml`, quyết định ghi vào train.base_model.
 # Golden chấm đúng 1 lần mỗi milestone (model đã chọn trên val), quyết định promote + ghi reports/next_action.md.
 # Vòng sau: đổi params.yaml (milestone.id mới + thay đổi) rồi `dvc repro` -> DVC chỉ chạy lại stage bị ảnh hưởng.
 #
 #   dvc repro check_data      # CPU, chạy được trên laptop
 #   dvc repro sanity          # GPU, vài phút: overfit 50 mẫu
-#   dvc repro                 # toàn bộ (GPU thuê)
+#   dvc repro                 # cả vòng (GPU thuê)
 #   dvc dag                   # xem lineage
 
 stages:
@@ -65,6 +66,7 @@ stages:
       - reports/checks.json
     params:
       - sanity
+      - train.base_model
       - train.max_length
       - generation
     metrics:
@@ -72,28 +74,6 @@ stages:
           cache: false
     outs:
       - reports/sanity_wrong.jsonl:
-          cache: false
-
-  bakeoff:
-    cmd: python -m src.bakeoff
-    deps:
-      - src/bakeoff.py
-      - src/sft.py
-      - src/engine.py
-      - src/prompting.py
-      - data/train.jsonl
-      - data/val.jsonl
-      - reports/sanity.json
-    params:
-      - bakeoff
-      - train
-      - generation
-    outs:
-      - reports/bakeoff.json:
-          cache: false
-      - reports/bakeoff.md:
-          cache: false
-      - reports/bakeoff_choice.json:
           cache: false
 
   train:
@@ -104,7 +84,7 @@ stages:
       - src/prompting.py
       - data/train.jsonl
       - data/val.jsonl
-      - reports/bakeoff_choice.json
+      - reports/sanity.json     # cổng chặn: train chỉ chạy sau khi sanity đã pass
     params:
       - train
     outs:
@@ -159,6 +139,7 @@ stages:
       - reports/selection.json
     params:
       - project
+      - train.base_model
     outs:
       - reports/registered.json:
           cache: false

@@ -2,10 +2,12 @@
 
 ## Vòng lặp
 ```
-          ┌──────────────── vòng sau: đổi data / params / model, milestone.id mới ───────────────┐
-          ▼                                                                                       │
-fetch → prepare → check_data → sanity → bakeoff → train → eval_val → select → register → golden ─┘
- (DVC lineage)     (CPU)       (overfit 50)  (chọn model)  (grid×seed)  (bảng val)  (ổn định+ngưỡng)  (MLflow)  (1 lần/milestone)
+ MỘT LẦN, NGOÀI VÒNG LẶP:  bakeoff (so ứng viên trên val) ──► bạn ghi quyết định vào params.yaml: train.base_model
+                                                                     │
+          ┌──────────── vòng sau: đổi data / params, milestone.id mới ┼──────────────────┐
+          ▼                                                          ▼                  │
+fetch → prepare → check_data → sanity → train → eval_val → select → register → golden ─┘
+ (DVC lineage)     (CPU)     (overfit 50) (grid×seed) (bảng val) (ổn định+ngưỡng) (MLflow) (1 lần/milestone)
 ```
 
 | Tập | Dùng để | Nguồn |
@@ -22,8 +24,11 @@ bảng/cột nên SQL của nó không chạy được (chi tiết trong `src/pr
    và bắt được dự đoán sai; logic chọn ngưỡng đúng trên dữ liệu tổng hợp. Fail thì dừng.
 2. **sanity** (GPU, vài phút): kiểm tra label masking (chỉ phần SQL được tính loss), rồi cho model học thuộc 50 mẫu
    và chấm lại chính 50 mẫu đó. **EX < 98% hoặc loss không xuống → pipeline có bug**, dừng trước khi tốn GPU.
-3. **bakeoff**: mọi ứng viên trong `params.yaml` chạy cùng ngân sách (zero-shot, fine-tune ngắn, chấm val, đo latency,
-   đếm tham số). Kết quả ở `reports/bakeoff.md`. Chọn trong ràng buộc `max_params_b`; model nhỏ hơn thắng nếu kém ≤ 2 điểm.
+3. **bakeoff (ngoài vòng lặp, file `bakeoff/dvc.yaml`)**: chạy một lần lúc đầu, hoặc khi muốn xét lại base model.
+   Các ứng viên chạy lần lượt với cùng ngân sách (zero-shot, fine-tune ngắn, chấm val, đo latency, đếm tham số).
+   Kết quả nằm ở `reports/bakeoff.md` cùng một đề xuất (trong ràng buộc `max_params_b`; model nhỏ hơn thắng nếu kém
+   ≤ 2 điểm). **Bạn tự ghi quyết định** vào `train.base_model`. Không stage nào trong vòng lặp phụ thuộc vào bakeoff,
+   nên sửa code hay dữ liệu không kéo nó chạy lại.
 4. **train**: grid `lr × seed`; mỗi tổ hợp là một MLflow run, lưu checkpoint mỗi epoch.
 5. **eval_val**: chấm mọi checkpoint trên val và trên `train_probe` (300 câu train) để có train-EX.
 6. **select**: tạo `reports/val_table.md` gồm bảng từng checkpoint, cột chẩn đoán và bảng độ ổn định theo seed.
@@ -100,9 +105,17 @@ cat reports/sanity.json        # "pass": true mới được đi tiếp
 Fail thì **dừng**, xem `reports/sanity_wrong.jsonl` (cột `pred` so với `sql`, cột `raw_output`):
 loss không xuống → lỗi train (lr, label masking); loss thấp mà EX thấp → lỗi inference (template, eos) hoặc bộ chấm.
 
-### B4. Máy GPU: chạy cả vòng (khoảng 8–12 giờ)
+### B3.5. Máy GPU: bakeoff (chỉ lần đầu, khoảng 1–1.5 giờ)
 ```bash
-dvc repro 2>&1 | tee logs_M1.txt        # bakeoff → train → eval_val → select → register → golden
+dvc repro bakeoff/dvc.yaml
+cat reports/bakeoff.md         # bảng so sánh + model được đề xuất
+```
+Ghi model đã chọn vào `params.yaml` → `train.base_model`. Nếu khác model đang dùng cho sanity thì chạy lại B3.
+Đã chốt base model rồi thì các milestone sau bỏ qua bước này.
+
+### B4. Máy GPU: chạy cả vòng (khoảng 6–10 giờ)
+```bash
+dvc repro 2>&1 | tee logs_M1.txt        # train → eval_val → select → register → golden
 ```
 Theo dõi trong lúc chạy (cửa sổ tmux khác: `Ctrl+b c`):
 ```bash
@@ -115,7 +128,7 @@ Máy bị ngắt giữa chừng: chạy lại `dvc repro`. Run đã xong (có fi
 ### B5. Máy GPU: lưu kết quả TRƯỚC KHI TẮT MÁY
 Tắt máy thuê là mất hết thứ chưa mang về.
 ```bash
-git add dvc.lock reports/ && git commit -m "M1: kết quả" && git push     # bảng val, bakeoff, golden, ledger
+git add dvc.lock bakeoff/ reports/ && git commit -m "M1: kết quả" && git push     # bảng val, bakeoff, golden, ledger
 dvc push                                                                  # nếu có dữ liệu mới
 tar czf mlflow_M1.tgz mlflow.db mlartifacts/                              # tracking + registry + model đã đăng ký
 ```
@@ -127,10 +140,9 @@ Từ laptop: `scp root@<ip-gpu>:~/Finetune_Qwen3.5-0.8B/mlflow_M1.tgz .`
 git pull
 ```
 Đọc theo thứ tự:
-1. `reports/bakeoff.md`: base model nào được chọn, vì sao.
-2. `reports/val_table.md`: từng checkpoint, chẩn đoán under/overfit, độ ổn định qua seed, checkpoint + ngưỡng được chọn.
-3. `reports/next_action.md`: kết quả golden, có promote `champion` không, vòng sau nên làm gì.
-4. `reports/golden/ledger.csv`: lịch sử golden qua các milestone.
+1. `reports/val_table.md`: từng checkpoint, chẩn đoán under/overfit, độ ổn định qua seed, checkpoint + ngưỡng được chọn.
+2. `reports/next_action.md`: kết quả golden, có promote `champion` không, vòng sau nên làm gì.
+3. `reports/golden/ledger.csv`: lịch sử golden qua các milestone.
 
 ### B7. Vòng sau (milestone mới)
 Sửa đúng thứ mà `next_action.md` chỉ ra, đổi `milestone.id`, rồi quay lại B4 (đổi code thì chạy lại B3 trước):
@@ -138,7 +150,7 @@ Sửa đúng thứ mà `next_action.md` chỉ ra, đổi `milestone.id`, rồi q
 dvc exp run -S milestone.id=M2 -S 'milestone.note=giảm epoch vì overfit' -S train.epochs=2
 dvc exp show                   # so params + metrics giữa các vòng
 ```
-DVC chỉ chạy lại các stage bị ảnh hưởng. Ví dụ đổi `train.*` thì không chạy lại fetch/prepare/sanity/bakeoff.
+DVC chỉ chạy lại các stage bị ảnh hưởng. Ví dụ đổi `train.*` (trừ `base_model`) thì không chạy lại fetch/prepare/sanity.
 Golden của milestone cũ không chấm lại được; model mới bắt buộc thuộc milestone mới.
 
 ### Dùng model đã promote

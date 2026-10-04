@@ -18,13 +18,13 @@ def main():
     P = params()
     name = P["project"]["registered_model"]
     sel = json.loads((REPORTS / "selection.json").read_text(encoding="utf-8"))
-    choice = json.loads((REPORTS / "bakeoff_choice.json").read_text(encoding="utf-8"))
+    base_model = P["train"]["base_model"]
 
     export_dir = OUTPUTS / "export" / f"{sel['run']}-{sel['checkpoint']}"
     if not export_dir.exists():
         export_bf16(str(ROOT / sel["model_path"]), str(export_dir))
     config = {"threshold": sel["threshold"]["threshold"], "target_precision": sel["target_precision"],
-              "base_model": choice["hf_id"], **P["generation"]}
+              "base_model": base_model, **P["generation"]}
     write_json(export_dir.parent / "serving_config.json", config)
 
     mlflow = setup_mlflow("text2sql-train")
@@ -53,7 +53,7 @@ def main():
         "threshold": f"{sel['threshold']['threshold']:.4f}",
         "stability_score": f"{sel['stability']['score']:.4f}",
         "diagnosis": sel["diagnosis"],
-        "base_model": choice["hf_id"],
+        "base_model": base_model,
         "train_run": sel["run"], "checkpoint": sel["checkpoint"],
         **{k: v for k, v in tags.items() if k.startswith(("data.", "git_sha", "dvc_lock"))},
     }
