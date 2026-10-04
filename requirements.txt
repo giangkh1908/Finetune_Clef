@@ -1,5 +1,6 @@
 # Pipeline (CPU: fetch / prepare / check_data chỉ cần nhóm này)
 dvc>=3.60
+dvc-gdrive          # DVC remote trên Google Drive
 mlflow>=3.5
 pyyaml
 pandas
