@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+mlflow.db
+mlruns/
+mlartifacts/
+outputs/
+reports/golden/*.errors.jsonl
+reports/sanity_wrong.jsonl

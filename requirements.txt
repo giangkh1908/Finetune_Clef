@@ -1,0 +1,19 @@
+# Pipeline (CPU: fetch / prepare / check_data chỉ cần nhóm này)
+dvc>=3.60
+mlflow>=3.5
+pyyaml
+pandas
+gdown
+
+# Train / inference (GPU)
+torch>=2.5
+transformers>=5.16
+trl
+peft
+datasets
+accelerate
+# Kernel nhanh cho lớp Gated DeltaNet của Qwen3.5 (không có thì fallback PyTorch, chậm hơn nhiều)
+flash-linear-attention
+causal-conv1d
+# Tuỳ chọn: generation.backend: vllm
+# vllm

@@ -1,0 +1,42 @@
+{
+  "db_disjoint_train_val": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "db_disjoint_train_golden": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "db_disjoint_val_golden": {
+    "pass": true,
+    "detail": "[]"
+  },
+  "question_overlap_val_low": {
+    "pass": true,
+    "detail": "3/952"
+  },
+  "question_overlap_golden_low": {
+    "pass": true,
+    "detail": "9/1907"
+  },
+  "train_probe_subset_of_train": {
+    "pass": true,
+    "detail": "300 mẫu"
+  },
+  "no_empty_fields": {
+    "pass": true,
+    "detail": ""
+  },
+  "scorer_gold_as_pred_is_100": {
+    "pass": true,
+    "detail": "EX=1.0000"
+  },
+  "scorer_rejects_wrong_results": {
+    "pass": true,
+    "detail": "0 false positive"
+  },
+  "threshold_logic": {
+    "pass": true,
+    "detail": "{'threshold': 0.6, 'coverage': 0.5, 'precision': 1.0, 'answered': 3, 'target_reached': True}"
+  }
+}

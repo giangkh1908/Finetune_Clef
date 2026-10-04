@@ -1,0 +1,120 @@
+schema: '2.0'
+stages:
+  fetch:
+    cmd: python -m src.fetch
+    deps:
+    - path: src/fetch.py
+      hash: md5
+      md5: 277d1f2faf8777709d5c97a8219eb4a4
+      size: 1771
+    params:
+      params.yaml:
+        fetch:
+          vitext2sql_repo: https://github.com/VinAIResearch/ViText2SQL.git
+          vitext2sql_commit: e759141d891feb794bb9a9fb912d544b25583b3c
+          spider_gdrive_id: 1403EGqzIDoHMdQF4c9Bkyl7dZLZ5Wt6J
+    outs:
+    - path: raw/SOURCES.json
+      hash: md5
+      md5: 01ad85fcbd71c0cf31032ef67cf6799a
+      size: 204
+    - path: raw/ViText2SQL
+      hash: md5
+      md5: 00b5003648467c6ff95913b07061d0a0.dir
+      size: 80542601
+      nfiles: 11
+    - path: raw/spider
+      hash: md5
+      md5: a3e8b7d10b62891d6e2d8c9372ee1f75.dir
+      size: 917377540
+      nfiles: 396
+  prepare:
+    cmd: python -m src.prepare
+    deps:
+    - path: raw/ViText2SQL
+      hash: md5
+      md5: 00b5003648467c6ff95913b07061d0a0.dir
+      size: 80542601
+      nfiles: 11
+    - path: raw/spider
+      hash: md5
+      md5: a3e8b7d10b62891d6e2d8c9372ee1f75.dir
+      size: 917377540
+      nfiles: 396
+    - path: src/common.py
+      hash: md5
+      md5: f659666e6911a4d9a292a5516f60255f
+      size: 2860
+    - path: src/prepare.py
+      hash: md5
+      md5: 0622047bcb6d249afee0da6bd81a46e5
+      size: 4645
+    - path: src/sql_utils.py
+      hash: md5
+      md5: 1a721f457e41620c92da8493ad0ebe03
+      size: 6950
+    params:
+      params.yaml:
+        prepare:
+          level: syllable-level
+          sample_rows: 3
+          add_english_to_train: true
+          train_probe_size: 300
+          seed: 42
+    outs:
+    - path: data/golden/golden.jsonl
+      hash: md5
+      md5: d45ad2d2aa4a09fbfa763d74749c6008
+      size: 6218453
+    - path: data/train.jsonl
+      hash: md5
+      md5: 2230868bb4fd46f0fe22e8d0fc6fdba5
+      size: 38569964
+    - path: data/train_probe.jsonl
+      hash: md5
+      md5: c8278c47bcb3bb20abb3de83e45558f5
+      size: 865323
+    - path: data/val.jsonl
+      hash: md5
+      md5: eab574a0cd99b34b2c9a300b17c2ad02
+      size: 2271279
+    - path: reports/data_stats.json
+      hash: md5
+      md5: b23556138f88e8eb631442a7cb1a33af
+      size: 885
+  check_data:
+    cmd: python -m src.check_data
+    deps:
+    - path: data/golden/golden.jsonl
+      hash: md5
+      md5: d45ad2d2aa4a09fbfa763d74749c6008
+      size: 6218453
+    - path: data/train.jsonl
+      hash: md5
+      md5: 2230868bb4fd46f0fe22e8d0fc6fdba5
+      size: 38569964
+    - path: data/train_probe.jsonl
+      hash: md5
+      md5: c8278c47bcb3bb20abb3de83e45558f5
+      size: 865323
+    - path: data/val.jsonl
+      hash: md5
+      md5: eab574a0cd99b34b2c9a300b17c2ad02
+      size: 2271279
+    - path: src/check_data.py
+      hash: md5
+      md5: 9191461b9f4257241d0fd278a30504d5
+      size: 3499
+    - path: src/evaluate.py
+      hash: md5
+      md5: 57a1612ea860be50f454789a94994f57
+      size: 3747
+    - path: src/sql_utils.py
+      hash: md5
+      md5: 1a721f457e41620c92da8493ad0ebe03
+      size: 6950
+    outs:
+    - path: reports/checks.json
+      hash: md5
+      md5: 1711d7be1f743ee975720e842a009d25
+      size: 895

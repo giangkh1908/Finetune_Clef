@@ -1,0 +1,188 @@
+# Một vòng lặp = một milestone:
+#   fetch -> prepare -> check_data -> sanity -> bakeoff -> train -> eval_val -> select -> register -> golden
+# Golden chấm đúng 1 lần mỗi milestone (model đã chọn trên val), quyết định promote + ghi reports/next_action.md.
+# Vòng sau: đổi params.yaml (milestone.id mới + thay đổi) rồi `dvc repro` -> DVC chỉ chạy lại stage bị ảnh hưởng.
+#
+#   dvc repro check_data      # CPU, chạy được trên laptop
+#   dvc repro sanity          # GPU, vài phút: overfit 50 mẫu
+#   dvc repro                 # toàn bộ (GPU thuê)
+#   dvc dag                   # xem lineage
+
+stages:
+  fetch:
+    cmd: python -m src.fetch
+    deps:
+      - src/fetch.py
+    params:
+      - fetch
+    outs:
+      - raw/ViText2SQL
+      - raw/spider
+      - raw/SOURCES.json
+
+  prepare:
+    cmd: python -m src.prepare
+    deps:
+      - src/prepare.py
+      - src/sql_utils.py
+      - src/common.py
+      - raw/ViText2SQL
+      - raw/spider
+    params:
+      - prepare
+    outs:
+      - data/train.jsonl
+      - data/train_probe.jsonl
+      - data/val.jsonl
+      - data/golden/golden.jsonl
+    metrics:
+      - reports/data_stats.json:
+          cache: false
+
+  check_data:
+    cmd: python -m src.check_data
+    deps:
+      - src/check_data.py
+      - src/evaluate.py
+      - src/sql_utils.py
+      - data/train.jsonl
+      - data/train_probe.jsonl
+      - data/val.jsonl
+      - data/golden/golden.jsonl
+    metrics:
+      - reports/checks.json:
+          cache: false
+
+  sanity:
+    cmd: python -m src.sanity
+    deps:
+      - src/sanity.py
+      - src/sft.py
+      - src/engine.py
+      - src/prompting.py
+      - src/evaluate.py
+      - data/train.jsonl
+      - reports/checks.json
+    params:
+      - sanity
+      - train.max_length
+      - generation
+    metrics:
+      - reports/sanity.json:
+          cache: false
+    outs:
+      - reports/sanity_wrong.jsonl:
+          cache: false
+
+  bakeoff:
+    cmd: python -m src.bakeoff
+    deps:
+      - src/bakeoff.py
+      - src/sft.py
+      - src/engine.py
+      - src/prompting.py
+      - data/train.jsonl
+      - data/val.jsonl
+      - reports/sanity.json
+    params:
+      - bakeoff
+      - train
+      - generation
+    outs:
+      - reports/bakeoff.json:
+          cache: false
+      - reports/bakeoff.md:
+          cache: false
+      - reports/bakeoff_choice.json:
+          cache: false
+
+  train:
+    cmd: python -m src.train
+    deps:
+      - src/train.py
+      - src/sft.py
+      - src/prompting.py
+      - data/train.jsonl
+      - data/val.jsonl
+      - reports/bakeoff_choice.json
+    params:
+      - train
+    outs:
+      - outputs/runs:
+          cache: false
+          persist: true     # giữ run đã xong để chạy tiếp được khi máy thuê bị ngắt
+      - reports/train_runs.json:
+          cache: false
+
+  eval_val:
+    cmd: python -m src.eval_val
+    deps:
+      - src/eval_val.py
+      - src/engine.py
+      - src/evaluate.py
+      - data/val.jsonl
+      - data/train_probe.jsonl
+      - reports/train_runs.json
+    params:
+      - generation
+    outs:
+      - outputs/preds:
+          cache: false
+          persist: true
+      - reports/val_metrics.json:
+          cache: false
+
+  select:
+    cmd: python -m src.select_model
+    deps:
+      - src/select_model.py
+      - src/evaluate.py
+      - reports/val_metrics.json
+    params:
+      - select
+    outs:
+      - reports/val_table.md:
+          cache: false
+      - reports/val_table.csv:
+          cache: false
+      - reports/threshold_curve.csv:
+          cache: false
+    metrics:
+      - reports/selection.json:
+          cache: false
+
+  register:
+    cmd: python -m src.register
+    deps:
+      - src/register.py
+      - src/serving.py
+      - reports/selection.json
+    params:
+      - project
+    outs:
+      - reports/registered.json:
+          cache: false
+
+  # Cuối mỗi vòng: chấm model vừa chọn trên golden đúng 1 lần, quyết định promote + gợi ý vòng sau.
+  golden:
+    cmd: python -m src.golden_eval
+    deps:
+      - src/golden_eval.py
+      - src/evaluate.py
+      - reports/registered.json
+      - data/golden/golden.jsonl
+    params:
+      - milestone
+      - golden
+      - select.target_precision
+    outs:
+      - reports/golden/${milestone.id}.json:
+          cache: false
+      - reports/next_action.md:
+          cache: false
+
+plots:
+  - reports/threshold_curve.csv:
+      x: coverage
+      y: precision
+      title: Precision vs coverage trên val (chọn ngưỡng)

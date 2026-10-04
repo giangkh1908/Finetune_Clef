@@ -1,0 +1,77 @@
+# Mọi tham số của pipeline nằm ở đây. DVC theo dõi file này: đổi tham số nào thì chỉ các stage phụ thuộc chạy lại.
+
+project:
+  mlflow_tracking_uri: sqlite:///mlflow.db   # có thể ghi đè bằng biến môi trường MLFLOW_TRACKING_URI
+  registered_model: text2sql-vi
+
+# Mỗi vòng lặp (đổi dữ liệu / hyperparam / model) = 1 milestone mới. Golden chấm đúng 1 lần ở cuối mỗi milestone.
+milestone:
+  id: M1
+  note: "baseline: ViText2SQL + Spider EN, full FT"
+
+fetch:
+  vitext2sql_repo: https://github.com/VinAIResearch/ViText2SQL.git
+  vitext2sql_commit: e759141d891feb794bb9a9fb912d544b25583b3c
+  spider_gdrive_id: 1403EGqzIDoHMdQF4c9Bkyl7dZLZ5Wt6J
+
+prepare:
+  level: syllable-level        # syllable-level = tiếng Việt tự nhiên (không tách từ bằng dấu _)
+  sample_rows: 3               # số dòng dữ liệu mẫu mỗi bảng đưa vào schema
+  add_english_to_train: true   # thêm câu hỏi tiếng Anh gốc của Spider (cùng DB train) vào train
+  train_probe_size: 300        # tập con train cố định để đo train-EX khi chẩn đoán overfit
+  seed: 42
+
+generation:
+  backend: hf                  # hf | vllm
+  batch_size: 16
+  max_new_tokens: 300
+
+# ---- Bước 1: sanity overfit (rẻ, chạy trước khi tốn GPU cho train thật)
+sanity:
+  model: Qwen/Qwen3.5-0.8B
+  n_examples: 50
+  epochs: 30
+  lr: 1.0e-4
+  batch_size: 8
+  pass_ex: 0.98                # EX trên chính 50 mẫu đã học phải >= mức này, nếu không là bug pipeline
+  max_final_loss: 0.05
+
+# ---- Bước 2: bakeoff chọn base model (chỉ dùng train + val, không bao giờ đụng golden)
+bakeoff:
+  candidates:
+    - {name: qwen3.5-0.8b, hf_id: Qwen/Qwen3.5-0.8B}
+    - {name: qwen3.5-2b, hf_id: Qwen/Qwen3.5-2B}
+    - {name: qwen3-1.7b, hf_id: Qwen/Qwen3-1.7B}
+    - {name: qwen2.5-coder-1.5b, hf_id: Qwen/Qwen2.5-Coder-1.5B-Instruct}
+  train_subset: 3000           # fine-tune ngắn, cùng ngân sách cho mọi ứng viên
+  epochs: 1
+  lr: 2.0e-5
+  latency_probe: 50            # số câu đo latency batch=1
+  max_params_b: 2.5            # ràng buộc triển khai
+  prefer_smaller_within: 0.02  # model nhỏ hơn được chọn nếu val-EX kém model tốt nhất <= 2 điểm
+
+# ---- Bước 3: train thật = grid hyperparam x nhiều seed (để đo độ ổn định)
+train:
+  method: full                 # full | lora
+  epochs: 3
+  max_length: 4096
+  batch_size: 8
+  grad_accum: 4
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  lora: {r: 16, alpha: 32, dropout: 0.05}
+  grid:
+    lr: [1.0e-5, 3.0e-5]
+  seeds: [42, 1234]
+
+# ---- Bước 4: chọn trên val
+select:
+  stability_k: 1.0             # điểm ổn định = mean(val-EX qua các seed) - k * std
+  underfit_train_ex: 0.60      # train-EX dưới mức này -> underfit
+  overfit_gap: 0.20            # train-EX - val-EX vượt mức này -> overfit
+  target_precision: 0.90       # ngưỡng tin cậy: coverage lớn nhất mà precision trên val >= mức này
+
+# ---- Bước 5: golden (chấm 1 lần mỗi milestone)
+golden:
+  max_ex_drop_vs_val: 0.05     # golden-EX thấp hơn val-EX quá mức này -> nghi chọn quá khớp val / lệch phân phối
+  max_precision_drop: 0.05     # precision@ngưỡng trên golden thấp hơn target quá mức này -> ngưỡng không chuyển giao
