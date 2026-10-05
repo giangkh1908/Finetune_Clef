@@ -6,3 +6,4 @@ dvc-gdrive          # DVC remote trên Google Drive
 mlflow>=3.5
 pyyaml
 pandas
+scikit-learn        # confusion matrix, đường ngưỡng (roc_curve), P/R/F1 từng intent

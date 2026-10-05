@@ -5,11 +5,16 @@ Quyết định khi chạy thật: confidence >= ngưỡng -> tự xử lý, ng�
 => accuracy / NLL / ECE đo chất lượng model; precision/coverage tại ngưỡng đo chất lượng *quyết định*.
 
 Accuracy, macro-F1, NLL, Brier, ECE lấy từ clef_finetune.metrics để khớp đúng với `clef-finetune eval`.
+Confusion matrix, đường ngưỡng, P/R/F1 từng intent: scikit-learn.
 """
 
+import warnings
 from collections import Counter
 
+import numpy as np
 from clef_finetune.metrics import brier_score, ece, macro_f1, nll
+from sklearn.exceptions import UndefinedMetricWarning
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_curve
 
 from src.records import scenario_of
 
@@ -50,17 +55,11 @@ def summarize(scored: list[dict], prefix: str = "") -> dict:
 
 
 def per_intent(scored: list[dict]) -> list[dict]:
-    tot, ok, predicted = Counter(), Counter(), Counter()
-    for r in scored:
-        tot[r["intent"]] += 1
-        ok[r["intent"]] += r["correct"]
-        predicted[r["pred"]] += 1
-    out = []
-    for k in sorted(tot):
-        prec = ok[k] / predicted[k] if predicted[k] else 0.0
-        rec = ok[k] / tot[k]
-        out.append({"intent": k, "n": tot[k], "recall": rec, "precision": prec,
-                    "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0})
+    labels = sorted({r["intent"] for r in scored})
+    prec, rec, f1, n = precision_recall_fscore_support([r["intent"] for r in scored], [r["pred"] for r in scored],
+                                                       labels=labels, zero_division=0)
+    out = [{"intent": k, "n": int(n[i]), "recall": float(rec[i]), "precision": float(prec[i]), "f1": float(f1[i])}
+           for i, k in enumerate(labels)]
     return sorted(out, key=lambda x: x["f1"])
 
 
@@ -81,29 +80,36 @@ def decide(r: dict, threshold: float) -> bool:
     return r["confidence"] >= threshold
 
 
-def selective_metrics(scored: list[dict], threshold: float) -> dict:
-    tp = fp = fn = tn = 0
-    for r in scored:
-        if decide(r, threshold):
-            tp += r["correct"]
-            fp += not r["correct"]
-        else:
-            fn += r["correct"]
-            tn += not r["correct"]
-    n = max(len(scored), 1)
+def _rates(threshold, tp, fp, fn, tn) -> dict:
+    tp, fp, fn, tn = int(tp), int(fp), int(fn), int(tn)
     prec = tp / (tp + fp) if tp + fp else 1.0
     rec = tp / (tp + fn) if tp + fn else 0.0
     return {
-        "threshold": threshold, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "threshold": float(threshold), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
         "precision": prec, "recall": rec, "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
         "fpr": fp / (fp + tn) if fp + tn else 0.0,
-        "coverage": (tp + fp) / n, "answered": tp + fp,
+        "coverage": (tp + fp) / max(tp + fp + fn + tn, 1), "answered": tp + fp,
     }
 
 
+def selective_metrics(scored: list[dict], threshold: float) -> dict:
+    correct = [bool(r["correct"]) for r in scored]
+    auto = [decide(r, threshold) for r in scored]
+    tn, fp, fn, tp = confusion_matrix(correct, auto, labels=[False, True]).ravel()
+    return _rates(threshold, tp, fp, fn, tn)
+
+
 def threshold_curve(scored: list[dict]) -> list[dict]:
-    cands = sorted({0.0, *(round(r["confidence"], 4) for r in scored)})
-    return [selective_metrics(scored, t) for t in cands]
+    """Mọi ngưỡng = mọi giá trị confidence khác nhau (sklearn roc_curve), từ thấp (tự động hết) lên cao."""
+    y = np.array([bool(r["correct"]) for r in scored])
+    s = np.array([r["confidence"] for r in scored], dtype=float)
+    pos, neg = int(y.sum()), int((~y).sum())
+    with warnings.catch_warnings():  # chỉ có 1 lớp (toàn đúng / toàn sai) -> tpr/fpr = nan, quy về 0 bên dưới
+        warnings.simplefilter("ignore", UndefinedMetricWarning)
+        fpr, tpr, thr = roc_curve(y, s, drop_intermediate=False)
+    tp = np.rint(np.nan_to_num(tpr) * pos)
+    fp = np.rint(np.nan_to_num(fpr) * neg)
+    return [_rates(t, a, b, pos - a, neg - b) for t, a, b in zip(thr[:0:-1], tp[:0:-1], fp[:0:-1])]  # bỏ ngưỡng +inf
 
 
 def choose_threshold(scored: list[dict], gate: dict | None = None) -> dict:

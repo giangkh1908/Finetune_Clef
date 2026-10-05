@@ -102,8 +102,8 @@ stages:
       size: 7056
     - path: src/metrics.py
       hash: md5
-      md5: b40752e7929a7d366030b0f5954b8781
-      size: 6927
+      md5: 0e75630119d15490dc50f04ac032c1ca
+      size: 7866
     - path: src/records.py
       hash: md5
       md5: 13ab985ebe79011e67c288ed621ad94a
