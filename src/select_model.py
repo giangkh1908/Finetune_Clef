@@ -6,7 +6,8 @@ Chẩn đoán:
   - miscalibrated : ECE trên val cao -> confidence không đáng tin, ngưỡng sẽ khó chuyển giao
   - ok
 Độ ổn định: gom theo (lr, epoch) qua các seed, điểm = mean(val-acc) - k * std(val-acc).
-Ngưỡng: confidence nhỏ nhất sao cho precision trên val >= target, tức là coverage tự động lớn nhất.
+Ngưỡng: quét mọi ngưỡng confidence trên val, lấy ngưỡng có F1 lớn nhất trong các ngưỡng qua cổng; ghi TP/FP/FN/TN, P/R/F1/FPR tại đó
+rồi soát cổng chất lượng (params.yaml: gate). Không qua cổng thì register không gắn `candidate`.
 """
 
 import csv
@@ -15,7 +16,7 @@ import statistics
 from collections import defaultdict
 
 from src.common import OUTPUTS, REPORTS, lineage_tags, params, read_jsonl, setup_mlflow, write_json
-from src.metrics import choose_threshold, per_intent, selective_metrics, threshold_curve, top_confusions
+from src.metrics import check_gate, choose_threshold, confusion_line, per_intent, threshold_curve, top_confusions
 
 
 def diagnose(rows, s):
@@ -64,7 +65,8 @@ def md_table(rows, cols):
 
 
 def main():
-    s = params()["select"]
+    P = params()
+    s, gate = P["select"], P["gate"]
     rows = diagnose(json.loads((REPORTS / "val_metrics.json").read_text(encoding="utf-8")), s)
     groups = stability(rows, s["stability_k"])
 
@@ -73,7 +75,8 @@ def main():
     chosen = max(best_group["rows"], key=lambda r: r["val_acc"])
 
     scored = read_jsonl(OUTPUTS / "preds" / chosen["run"] / chosen["checkpoint"] / "val.jsonl")
-    thr = choose_threshold(scored, s["target_precision"])
+    thr = choose_threshold(scored, gate)
+    gate_res = check_gate(thr, gate)
     curve = threshold_curve(scored)
     weak = per_intent(scored)[:8]
     conf = top_confusions(scored, 8)
@@ -94,9 +97,12 @@ def main():
         f"(score={best_group['score']:.4f}, mean={best_group['val_acc_mean']:.4f} ± {best_group['val_acc_std']:.4f})",
         f"- Checkpoint: `{chosen['checkpoint_path']}` (val-acc={chosen['val_acc']:.4f}, "
         f"ECE={chosen['val_ece']:.4f}, chẩn đoán: {chosen['diagnosis']})",
-        f"- Ngưỡng confidence: {thr['threshold']:.4f} -> precision={thr['precision']:.4f}, "
-        f"coverage tự động={thr['coverage']:.4f} trên val (target {s['target_precision']}, "
-        f"{'đạt' if thr['target_reached'] else 'KHÔNG đạt'}); phần còn lại chuyển người.",
+        f"- Ngưỡng confidence: {thr['threshold']:.4f} = F1 max trên val "
+        f"{'trong các ngưỡng qua cổng' if thr['within_gate'] else '(KHÔNG ngưỡng nào qua cổng, lấy F1 max toàn bộ)'}"
+        "; dưới ngưỡng chuyển người.",
+        f"- Tại ngưỡng: {confusion_line(thr)}",
+        f"- Cổng chất lượng (val): **{'PASS' if gate_res['pass'] else 'FAIL'}**"
+        + (f" ({'; '.join(gate_res['fails'])})" if gate_res["fails"] else ""),
     ]
     if not best_group["all_ok"]:
         report.append("- ⚠️ Không cấu hình nào sạch hoàn toàn; xem cột diagnosis trước khi dùng.")
@@ -107,7 +113,8 @@ def main():
         w.writeheader()
         w.writerows(rows)
     with open(REPORTS / "threshold_curve.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["threshold", "coverage", "precision", "answered"])
+        w = csv.DictWriter(f, fieldnames=["threshold", "tp", "fp", "fn", "tn", "precision", "recall", "f1", "fpr",
+                                           "coverage", "answered"])
         w.writeheader()
         w.writerows(curve)
 
@@ -117,8 +124,7 @@ def main():
         "epoch": chosen["epoch"], "diagnosis": chosen["diagnosis"],
         "val_acc": chosen["val_acc"], "val_metrics": {k: v for k, v in chosen.items() if k.startswith("val_")},
         "stability": {k: best_group[k] for k in grp_cols},
-        "threshold": thr, "val_at_threshold": selective_metrics(scored, thr["threshold"]),
-        "target_precision": s["target_precision"],
+        "threshold": thr, "gate_val": gate_res,
     }
     write_json(REPORTS / "selection.json", selection)
 
@@ -127,15 +133,17 @@ def main():
         mlflow.set_tags({**lineage_tags(), "stage": "select", "selected_run_id": chosen["mlflow_run_id"]})
         mlflow.log_params({"chosen_run": chosen["run"], "chosen_checkpoint": chosen["checkpoint"],
                            "threshold": thr["threshold"]})
+        mlflow.set_tag("gate_val", "pass" if gate_res["pass"] else "fail")
         mlflow.log_metrics({"val_acc": chosen["val_acc"], "val_ece": chosen["val_ece"],
-                            "val_precision_at_thr": thr["precision"], "val_coverage_at_thr": thr["coverage"],
-                            "stability_score": best_group["score"]})
+                            "stability_score": best_group["score"],
+                            **{f"val_{k}_at_thr": thr[k] for k in ("tp", "fp", "fn", "tn", "precision", "recall",
+                                                                    "f1", "fpr", "coverage")}})
         for f in ("val_table.md", "val_table.csv", "threshold_curve.csv", "selection.json"):
             mlflow.log_artifact(str(REPORTS / f))
     with mlflow.start_run(run_id=chosen["mlflow_run_id"]):
         mlflow.set_tag("selected", f"{chosen['checkpoint']}")
 
-    print("\n".join(report[-4:]))
+    print("\n".join(report[-5:]))
 
 
 if __name__ == "__main__":

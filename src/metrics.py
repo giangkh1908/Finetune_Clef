@@ -70,6 +70,11 @@ def top_confusions(scored: list[dict], k: int = 10) -> list[tuple[str, str, int]
 
 
 # ---------------------------------------------------------------- ngưỡng tin cậy
+# Bài toán nhị phân "tự động xử lý hay chuyển người" tại ngưỡng t (positive = model trả lời đúng):
+#   TP: confidence >= t và đúng   -> tự động, đúng        FP: confidence >= t và sai -> tự động, SAI (lỗi lọt ra ngoài)
+#   FN: confidence <  t và đúng   -> chuyển người thừa    TN: confidence <  t và sai -> chuyển người, chặn được lỗi
+# precision = TP/(TP+FP): tỷ lệ đúng trong phần tự động | recall = TP/(TP+FN): phần câu đúng được tự động
+# FPR = FP/(FP+TN): phần câu sai bị lọt qua ngưỡng      | coverage = (TP+FP)/n: phần câu được tự động
 
 
 def decide(r: dict, threshold: float) -> bool:
@@ -77,13 +82,22 @@ def decide(r: dict, threshold: float) -> bool:
 
 
 def selective_metrics(scored: list[dict], threshold: float) -> dict:
-    answered = [r for r in scored if decide(r, threshold)]
-    n_ans = len(answered)
+    tp = fp = fn = tn = 0
+    for r in scored:
+        if decide(r, threshold):
+            tp += r["correct"]
+            fp += not r["correct"]
+        else:
+            fn += r["correct"]
+            tn += not r["correct"]
+    n = max(len(scored), 1)
+    prec = tp / (tp + fp) if tp + fp else 1.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
     return {
-        "threshold": threshold,
-        "coverage": n_ans / max(len(scored), 1),
-        "precision": sum(r["correct"] for r in answered) / n_ans if n_ans else 1.0,
-        "answered": n_ans,
+        "threshold": threshold, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "precision": prec, "recall": rec, "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
+        "fpr": fp / (fp + tn) if fp + tn else 0.0,
+        "coverage": (tp + fp) / n, "answered": tp + fp,
     }
 
 
@@ -92,12 +106,31 @@ def threshold_curve(scored: list[dict]) -> list[dict]:
     return [selective_metrics(scored, t) for t in cands]
 
 
-def choose_threshold(scored: list[dict], target_precision: float) -> dict:
-    """Coverage lớn nhất mà precision >= target. Không đạt được thì lấy ngưỡng có precision cao nhất."""
+def choose_threshold(scored: list[dict], gate: dict | None = None) -> dict:
+    """Quét mọi ngưỡng, lấy ngưỡng có F1 lớn nhất trong các ngưỡng qua cổng chất lượng; không ngưỡng nào qua thì
+    lấy F1 lớn nhất trên toàn đường cong (cổng sẽ FAIL). Bằng nhau thì lấy ngưỡng cao hơn = thận trọng hơn.
+    F1 thuần không có ràng buộc hay kéo ngưỡng xuống rất thấp (FPR cao) vì câu đúng chiếm đa số."""
     curve = threshold_curve(scored)
-    ok = [c for c in curve if c["precision"] >= target_precision and c["answered"] > 0]
-    if ok:
-        best = max(ok, key=lambda c: (c["coverage"], -c["threshold"]))
-        return {**best, "target_reached": True}
-    best = max((c for c in curve if c["answered"] > 0), key=lambda c: (c["precision"], c["coverage"]))
-    return {**best, "target_reached": False}
+    ok = [c for c in curve if gate and check_gate(c, gate)["pass"]]
+    best = max(ok or curve, key=lambda c: (round(c["f1"], 6), c["threshold"]))
+    return {**best, "within_gate": bool(ok)}
+
+
+def coverage_at_precision(scored: list[dict], target_precision: float) -> float:
+    """Coverage tự động lớn nhất mà precision >= target (0 nếu không ngưỡng nào đạt). Dùng để so model ở bakeoff."""
+    ok = [c["coverage"] for c in threshold_curve(scored) if c["precision"] >= target_precision and c["answered"]]
+    return max(ok, default=0.0)
+
+
+def check_gate(m: dict, gate: dict) -> dict:
+    """Cổng chất lượng trên metric tại ngưỡng. Trả về {pass, fails: [lý do]}."""
+    rules = [("precision", ">=", gate["min_precision"]), ("recall", ">=", gate["min_recall"]),
+             ("f1", ">=", gate["min_f1"]), ("fpr", "<=", gate["max_fpr"])]
+    fails = [f"{k}={m[k]:.4f} {'<' if op == '>=' else '>'} {lim}" for k, op, lim in rules
+             if (m[k] < lim if op == ">=" else m[k] > lim)]
+    return {"pass": not fails, "fails": fails}
+
+
+def confusion_line(m: dict) -> str:
+    return (f"TP={m['tp']} FP={m['fp']} FN={m['fn']} TN={m['tn']} | P={m['precision']:.4f} R={m['recall']:.4f} "
+            f"F1={m['f1']:.4f} FPR={m['fpr']:.4f} | coverage={m['coverage']:.4f}")

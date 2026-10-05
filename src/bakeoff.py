@@ -15,14 +15,13 @@ import shutil
 from src.common import OUTPUTS, REPORTS, lineage_tags, load_split, params, setup_mlflow, write_json
 from src.engines import ClefEngine, build_engine
 from src.finetune import build_cfg, free_gpu, run
-from src.metrics import choose_threshold, score_rows, summarize
+from src.metrics import coverage_at_precision, score_rows, summarize
 
 
 def evaluate(engine, val, target):
     scored = score_rows(engine.predict(val))
     m = summarize(scored, "val_")
-    thr = choose_threshold(scored, target)
-    m["val_auto_coverage"] = thr["coverage"] if thr["target_reached"] else 0.0
+    m["val_auto_coverage"] = coverage_at_precision(scored, target)
     if "options_collapsed" in scored[0]:
         m["val_options_collapsed_frac"] = sum(r["options_collapsed"] for r in scored) / len(scored)
     return m
@@ -30,7 +29,7 @@ def evaluate(engine, val, target):
 
 def run_candidate(c, P, train, val, mlflow):
     b, g = P["bakeoff"], P["eval"]
-    target = P["select"]["target_precision"]
+    target = P["gate"]["min_precision"]
     with mlflow.start_run(run_name=f"bakeoff-{c['name']}"):
         mlflow.set_tags({**lineage_tags(), "stage": "bakeoff", "kind": c["kind"], "hf_id": c["hf_id"]})
         mlflow.log_params({k: v for k, v in c.items() if k != "name"})

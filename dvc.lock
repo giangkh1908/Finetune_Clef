@@ -39,8 +39,8 @@ stages:
       size: 2973
     - path: src/prepare.py
       hash: md5
-      md5: 5d40ae01d6a57d10823e030c7ee32e67
-      size: 5194
+      md5: 49e926d4425af79f79ee8263af79e37b
+      size: 5497
     params:
       params.yaml:
         fetch.locale: vi-VN
@@ -71,8 +71,8 @@ stages:
       size: 544837
     - path: reports/data_stats.json
       hash: md5
-      md5: a95ca5abf5e0396c274ff02d998bcef4
-      size: 795
+      md5: 0c2cf4378341c0eb5fb053874abdb1ee
+      size: 891
   check_data:
     cmd: python -m src.check_data
     deps:
@@ -98,12 +98,12 @@ stages:
       size: 4811
     - path: src/check_data.py
       hash: md5
-      md5: 83e8b7a0d05e467055f822ff83d352cd
-      size: 5662
+      md5: b6c424bd845df1cf145fde912252216e
+      size: 7056
     - path: src/metrics.py
       hash: md5
-      md5: e9714c79573e2b3c7bd1a6965023ac5b
-      size: 4547
+      md5: b40752e7929a7d366030b0f5954b8781
+      size: 6927
     - path: src/records.py
       hash: md5
       md5: 13ab985ebe79011e67c288ed621ad94a
@@ -112,6 +112,7 @@ stages:
       params.yaml:
         check:
           max_text_overlap: 0.0
+          max_label_dist_tvd: 0.02
           min_train_per_intent: 3
         prepare.split:
           golden: 0.15
@@ -120,5 +121,5 @@ stages:
     outs:
     - path: reports/checks.json
       hash: md5
-      md5: e0a3c35862a7aba6a3d238eebe9445e6
-      size: 1765
+      md5: 57d3c679c177e7958247767e1cda8919
+      size: 2825

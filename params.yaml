@@ -25,6 +25,7 @@ prepare:
 
 check:
   max_text_overlap: 0.0        # val/golden không được chứa câu y hệt train
+  max_label_dist_tvd: 0.02     # khoảng cách (TVD) giữa phân phối intent/scenario của mỗi tập và toàn bộ dữ liệu
   min_train_per_intent: 3      # cooking_query chỉ có 6 câu trong toàn bộ MASSIVE vi-VN (4 ở train): biết trước sẽ yếu
 
 # Chấm điểm (dùng chung cho sanity / bakeoff / eval_val / serving)
@@ -94,9 +95,19 @@ select:
   underfit_train_acc: 0.80     # train-acc dưới mức này -> underfit
   overfit_gap: 0.10            # train-acc - val-acc vượt mức này -> overfit
   max_val_ece: 0.05            # ECE trên val vượt mức này -> miscalibrated
-  target_precision: 0.95       # ngưỡng: coverage tự động lớn nhất mà precision trên val >= mức này
+  # Ngưỡng confidence: quét mọi ngưỡng trên val, lấy ngưỡng có F1 lớn nhất (src/metrics.py: choose_threshold).
+
+# ---- Cổng chất lượng tại ngưỡng đã chọn (TP/FP/FN/TN, P/R/F1/FPR: định nghĩa ở src/metrics.py).
+#      Áp 2 lần: trên val (register: không qua thì không gắn `candidate`, không chấm golden) và trên golden (champion).
+#      Giá trị khởi điểm, chỉnh sau M1 khi đã thấy đường cong thật (reports/threshold_curve.csv).
+gate:
+  min_precision: 0.93          # trong phần tự động, >= 93% đúng
+  min_recall: 0.85             # >= 85% câu model làm đúng được tự động (không đẩy người quá nhiều)
+  min_f1: 0.90
+  max_fpr: 0.50                # <= 50% câu model làm sai lọt qua ngưỡng (còn lại bị chặn, chuyển người)
 
 # ---- Golden (chấm 1 lần mỗi milestone)
 golden:
   max_acc_drop_vs_val: 0.03    # golden-acc thấp hơn val-acc quá mức này -> nghi chọn quá khớp val / lệch phân phối
-  max_precision_drop: 0.03     # precision@ngưỡng trên golden thấp hơn target quá mức này -> ngưỡng không chuyển giao
+  max_f1_drop_vs_val: 0.03     # F1@ngưỡng trên golden thấp hơn trên val quá mức này -> ngưỡng không chuyển giao
+  # Champion = version có golden F1@ngưỡng cao nhất trong các version qua cổng golden, cùng golden md5.

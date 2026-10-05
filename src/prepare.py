@@ -100,6 +100,7 @@ def main():
 
     total = sum(len(v) for v in splits.values())
     stats = {"total": total, "dropped": dict(dropped)}
+    c_all = Counter(r["intent"] for rs in splits.values() for r in rs)
     for split, rs in splits.items():
         c = Counter(r["intent"] for r in rs)
         stats[split] = {
@@ -109,6 +110,7 @@ def main():
             "scenarios": len({r["scenario"] for r in rs}),
             "majority_intent_frac": round(max(c.values()) / len(rs), 4),
             "min_intent_count": min(c.values()),
+            "intent_dist_tvd": round(0.5 * sum(abs(c[k] / len(rs) - c_all[k] / total) for k in c_all), 4),
             "agree3_frac": round(sum(r["agree"] == 3 for r in rs) / len(rs), 4),
         }
         if split != "train":

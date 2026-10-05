@@ -35,6 +35,30 @@
     "pass": true,
     "detail": "[]"
   },
+  "intent_dist_train": {
+    "pass": true,
+    "detail": "TVD=0.0015 (ngưỡng 0.02)"
+  },
+  "intent_dist_val": {
+    "pass": true,
+    "detail": "TVD=0.0059 (ngưỡng 0.02)"
+  },
+  "intent_dist_golden": {
+    "pass": true,
+    "detail": "TVD=0.0039 (ngưỡng 0.02)"
+  },
+  "scenario_dist_train": {
+    "pass": true,
+    "detail": "TVD=0.0007 (ngưỡng 0.02)"
+  },
+  "scenario_dist_val": {
+    "pass": true,
+    "detail": "TVD=0.0035 (ngưỡng 0.02)"
+  },
+  "scenario_dist_golden": {
+    "pass": true,
+    "detail": "TVD=0.0023 (ngưỡng 0.02)"
+  },
   "labels_in_schema": {
     "pass": true,
     "detail": "[]"
@@ -81,6 +105,14 @@
   },
   "threshold_logic": {
     "pass": true,
-    "detail": "{'threshold': 0.6, 'coverage': 0.5, 'precision': 1.0, 'answered': 3, 'target_reached': True}"
+    "detail": "{'threshold': 0.6, 'tp': 4, 'fp': 0, 'fn': 1, 'tn': 3, 'precision': 1.0, 'recall': 0.8, 'f1': 0.888888888888889, 'fpr': 0.0, 'coverage': 0.5, 'answered': 4, 'within_gate': False}"
+  },
+  "gate_logic": {
+    "pass": true,
+    "detail": "{'pass': False, 'fails': ['recall=0.8000 < 0.9']}"
+  },
+  "threshold_within_gate": {
+    "pass": true,
+    "detail": "{'threshold': 0.2, 'tp': 5, 'fp': 2, 'fn': 0, 'tn': 1, 'precision': 0.7142857142857143, 'recall': 1.0, 'f1': 0.8333333333333333, 'fpr': 0.6666666666666666, 'coverage': 0.875, 'answered': 7, 'within_gate': True}"
   }
 }

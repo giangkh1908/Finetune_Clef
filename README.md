@@ -47,7 +47,8 @@ Mỗi MLflow run và model version mang tag md5 của dữ liệu + schema + `dv
 
 ## Các bước và cổng chặn
 1. **check_data** (CPU): 3 tập không chung id, không có câu trùng chữ giữa train và val/golden; tỷ lệ chia đúng;
-   intent nào cũng có ở val/golden; mọi request hợp lệ theo **đúng validator của clef-finetune**; thứ tự option
+   intent nào cũng có ở val/golden; **phân phối intent/scenario của từng tập khớp phân phối chung** (TVD ≤
+   `check.max_label_dist_tvd`, hiện train 0.0015 / val 0.0059 / golden 0.0039); mọi request hợp lệ theo **đúng validator của clef-finetune**; thứ tự option
    khớp encoder của Cloudflare (sắp xếp alphabet); bộ chấm cho 100% khi dự đoán = nhãn, 0% khi sai, NLL = log 60 khi
    phân bố đều; logic chọn ngưỡng đúng trên dữ liệu tổng hợp. Fail thì dừng.
 2. **sanity** (GPU, vài phút): (a) prompt + schema 60 intent + câu dài nhất vừa `eval.max_length` (encoder của Cloudflare
@@ -64,12 +65,30 @@ Mỗi MLflow run và model version mang tag md5 của dữ liệu + schema + `dv
 6. **select**: `reports/val_table.md` gồm bảng từng checkpoint, cột chẩn đoán, độ ổn định theo seed, intent yếu nhất,
    cặp nhầm nhiều nhất.
    - Chọn cấu hình có `mean − k·std` của val-acc cao nhất, ưu tiên cấu hình không under/overfit/miscalibrated.
-   - Ngưỡng: lấy coverage lớn nhất mà precision trên val ≥ `target_precision`.
+   - Ngưỡng: quét mọi ngưỡng confidence trên val (`reports/threshold_curve.csv`, `dvc plots show`), lấy ngưỡng
+     **F1 max trong các ngưỡng qua cổng chất lượng** (không ngưỡng nào qua thì F1 max toàn bộ, cổng FAIL).
      Khi chạy thật: confidence ≥ ngưỡng thì **tự động xử lý**, ngược lại **chuyển người** (hoặc hỏi lại người dùng).
-7. **register**: đóng gói adapter + head + schema + ngưỡng thành MLflow pyfunc, alias `candidate`. Backbone 9B
-   không nằm trong artifact: tải từ Hugging Face ở đúng revision đã pin.
-8. **golden**: chấm đúng artifact đã đăng ký. Đạt thì gắn alias `champion` (phải vượt champion cũ).
-   Ghi `reports/golden/ledger.csv` và `reports/next_action.md`. Cùng milestone mà model khác thì **bị từ chối**.
+7. **register**: đóng gói adapter + head + schema + ngưỡng thành MLflow pyfunc. **Mỗi lần chạy = 1 version mới**
+   trong Registry (kể cả khi trượt cổng, để ghi nhận), mang tag TP/FP/FN/TN, P/R/F1/FPR trên val + `gate_val`.
+   Chỉ version qua cổng val mới có alias `candidate`. Backbone 9B không nằm trong artifact: tải từ Hugging Face ở
+   đúng revision đã pin.
+8. **golden**: trượt cổng val thì không chấm (golden của milestone còn nguyên). Còn lại: chấm đúng artifact đã đăng ký
+   tại ngưỡng của val → cổng golden + F1/acc không tụt quá xa val → version "eligible".
+   **Champion = version eligible có golden F1 cao nhất trong mọi version** (cùng tập golden; hoà thì precision cao
+   hơn, rồi version mới hơn). Ghi `reports/golden/ledger.csv` và `reports/next_action.md` (kèm bảng xếp hạng).
+   Cùng milestone mà model khác thì **bị từ chối**.
+
+### Cổng chất lượng (`params.yaml: gate`)
+Bài toán nhị phân "tự động hay chuyển người" tại ngưỡng t, positive = model trả lời đúng:
+
+| | confidence ≥ t (tự động) | confidence < t (chuyển người) |
+|---|---|---|
+| **model đúng** | TP | FN (chuyển người thừa) |
+| **model sai** | FP (lỗi lọt ra ngoài) | TN (chặn được lỗi) |
+
+Precision = TP/(TP+FP) · Recall = TP/(TP+FN) · F1 · FPR = FP/(FP+TN) · coverage = (TP+FP)/n.
+Cổng: `min_precision`, `min_recall`, `min_f1`, `max_fpr`; áp trên val (register) và trên golden (champion).
+Giá trị hiện tại là điểm khởi đầu, chỉnh sau M1 khi đã thấy đường cong thật.
 
 ## Đọc chẩn đoán
 | Hiện tượng | Kết luận | Làm gì |
@@ -82,7 +101,9 @@ Mỗi MLflow run và model version mang tag md5 của dữ liệu + schema + `dv
 | một cặp intent hay nhầm | mô tả trong schema chưa phân biệt | sửa `schema/massive_intent.yaml`, milestone mới |
 | acc trên câu 3/3 người chấm đồng ý ≫ acc chung | nhãn MASSIVE mơ hồ | `prepare.min_agree_train`, gán nhãn lại |
 | golden-acc ≪ val-acc | chọn quá khớp val | **không chỉnh theo golden**; mở rộng val |
-| precision@ngưỡng trên golden ≪ target | ngưỡng không chuyển giao | calibrate lại trên val, milestone mới |
+| F1@ngưỡng trên golden ≪ trên val | ngưỡng không chuyển giao | calibrate lại trên val, milestone mới |
+| cổng FAIL ở precision / FPR | câu sai vẫn tự tin cao | calibration (ECE), dữ liệu cho cặp hay nhầm |
+| cổng FAIL ở recall | câu đúng bị đẩy sang người | confidence thấp: tăng epoch, giảm `label_smoothing` |
 
 Biết trước: `cooking_query` chỉ có 6 câu trong toàn bộ MASSIVE vi-VN (4 ở train), intent này sẽ yếu.
 

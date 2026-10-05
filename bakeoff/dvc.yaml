@@ -20,7 +20,7 @@ stages:
     params:
       - bakeoff
       - eval
-      - select.target_precision
+      - gate.min_precision
     outs:
       - reports/bakeoff.json:
           cache: false

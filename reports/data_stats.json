@@ -8,6 +8,7 @@
     "scenarios": 18,
     "majority_intent_frac": 0.0697,
     "min_intent_count": 4,
+    "intent_dist_tvd": 0.0015,
     "agree3_frac": 0.9075
   },
   "val": {
@@ -17,6 +18,7 @@
     "scenarios": 18,
     "majority_intent_frac": 0.0689,
     "min_intent_count": 1,
+    "intent_dist_tvd": 0.0059,
     "agree3_frac": 0.9122,
     "seen_in_train_frac": 0.0
   },
@@ -27,6 +29,7 @@
     "scenarios": 18,
     "majority_intent_frac": 0.0698,
     "min_intent_count": 1,
+    "intent_dist_tvd": 0.0039,
     "agree3_frac": 0.9072,
     "seen_in_train_frac": 0.0
   },

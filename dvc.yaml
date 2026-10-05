@@ -126,6 +126,7 @@ stages:
       - reports/val_metrics.json
     params:
       - select
+      - gate
     outs:
       - reports/val_table.md:
           cache: false
@@ -163,7 +164,7 @@ stages:
     params:
       - milestone
       - golden
-      - select.target_precision
+      - gate
     outs:
       - reports/golden/${milestone.id}.json:
           cache: false
@@ -172,6 +173,6 @@ stages:
 
 plots:
   - reports/threshold_curve.csv:
-      x: coverage
-      y: precision
-      title: Precision vs coverage tự động trên val (chọn ngưỡng)
+      x: threshold
+      y: [precision, recall, f1, fpr]
+      title: P / R / F1 / FPR theo ngưỡng confidence trên val (chọn ngưỡng F1 max)

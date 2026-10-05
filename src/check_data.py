@@ -9,7 +9,7 @@ from collections import Counter
 from clef_finetune.data import label_index, option_ids, validate_record
 
 from src.common import GOLDEN_FILE, REPORTS, load_split, params, read_jsonl, write_json
-from src.metrics import choose_threshold, score_rows, summarize
+from src.metrics import check_gate, choose_threshold, score_rows, summarize
 from src.prepare import norm_text
 from src.records import intents, question_id, questions, scenario_of, to_record
 
@@ -53,6 +53,15 @@ def main():
         miss = {r["intent"] for r in train} - {r["intent"] for r in rows}
         check(f"all_intents_in_{name}", not miss, str(sorted(miss)))
 
+    # Phân phối intent / scenario của từng tập phải giống phân phối chung (phân tầng đúng, không tập nào bị lệch).
+    max_tvd = P["check"]["max_label_dist_tvd"]
+    for key in ("intent", "scenario"):
+        c_all = Counter(r[key] for r in allrows)
+        for name, rows in (("train", train), ("val", val), ("golden", golden)):
+            c = Counter(r[key] for r in rows)
+            tvd = 0.5 * sum(abs(c[k] / len(rows) - c_all[k] / n_all) for k in c_all)
+            check(f"{key}_dist_{name}", tvd <= max_tvd, f"TVD={tvd:.4f} (ngưỡng {max_tvd})")
+
     # ---- nhãn và schema
     schema_intents = set(intents())
     used = {r["intent"] for r in allrows}
@@ -91,9 +100,18 @@ def main():
     check("nll_uniform_is_log_k", abs(m["nll"] - math.log(len(labels))) < 1e-6, f"nll={m['nll']:.4f}")
 
     # Logic chọn ngưỡng trên dữ liệu tổng hợp: biết trước đáp án.
-    synth = [{"confidence": c, "correct": c >= 0.5} for c in (0.1, 0.2, 0.3, 0.6, 0.7, 0.9)]
-    t = choose_threshold(synth, 1.0)
-    check("threshold_logic", t["precision"] == 1.0 and t["coverage"] == 0.5, str(t))
+    # 4 đúng (0.6..0.9) + 1 đúng thấp (0.2) + 3 sai (0.1, 0.3, 0.4): F1 max ở ngưỡng 0.6 (TP=4 FP=0 FN=1 TN=3),
+    # hạ ngưỡng xuống 0.2 thì F1 = 0.83, ngưỡng 0 thì 0.77.
+    synth = [{"confidence": c, "correct": ok} for c, ok in
+             ((0.1, False), (0.2, True), (0.3, False), (0.4, False), (0.6, True), (0.7, True), (0.8, True), (0.9, True))]
+    t = choose_threshold(synth)
+    check("threshold_logic", (t["threshold"], t["tp"], t["fp"], t["fn"], t["tn"]) == (0.6, 4, 0, 1, 3)
+          and abs(t["f1"] - 8 / 9) < 1e-9 and t["fpr"] == 0.0, str(t))
+    g = check_gate(t, {"min_precision": 0.9, "min_recall": 0.9, "min_f1": 0.5, "max_fpr": 0.1})
+    check("gate_logic", not g["pass"] and len(g["fails"]) == 1 and g["fails"][0].startswith("recall"), str(g))
+    # Có cổng recall >= 0.9: chỉ ngưỡng <= 0.2 qua (R=1) -> F1 max trong đó là ngưỡng 0.2 (F1=0.83), không phải 0.6.
+    t = choose_threshold(synth, {"min_precision": 0.0, "min_recall": 0.9, "min_f1": 0.0, "max_fpr": 1.0})
+    check("threshold_within_gate", t["threshold"] == 0.2 and t["within_gate"], str(t))
 
     write_json(REPORTS / "checks.json", checks)
     failed = [k for k, v in checks.items() if not v["pass"]]
